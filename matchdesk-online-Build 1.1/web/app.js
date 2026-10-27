@@ -580,26 +580,51 @@ const view=()=>{let c=lastCombos.slice();const n=+$('#flt').value,m=$('#srt').va
  else if(m==='closest')c.sort((a,b)=>lastTarget-a.odds-(lastTarget-b.odds)||b.prob-a.prob);return c};
 
 // ---------- AI commentary (optional Groq primary, Gemini fallback) ----------
+function aiErrText(src,s,m){
+  const ml=String(m||'').toLowerCase();
+  if(s===401||s===403||(s===400&&/api key|api_key|invalid key|key not valid/.test(ml)))return `${src}: your key was rejected (it may be wrong, expired or blocked). Create a new key and paste it in About → Settings.`;
+  if(s===404)return `${src}: the AI model this app uses is no longer available (error 404). Please update the app or contact support.`;
+  if(s===429)return `${src}: free usage limit reached. Wait a few minutes, then tap ↻ AI.`;
+  if(s>=500)return `${src}: the service is having problems (error ${s}). Try again shortly.`;
+  return `${src}: request failed (error ${s}${m?' – '+String(m).slice(0,120):''}).`;
+}
+async function aiCall(src,url,opts,pick){
+  let r;
+  try{r=await fetch(url,opts)}catch{return{err:`${src}: could not connect. Check your internet connection.`}}
+  if(!r.ok){
+    let m='';try{const j=await r.json();m=(j.error&&(j.error.message||j.error))||''}catch{}
+    return{err:aiErrText(src,r.status,typeof m==='string'?m:''),status:r.status}
+  }
+  try{const j=await r.json();const t=pick(j);if(t)return{text:t}}catch{}
+  return{err:`${src}: the AI replied but returned no text. Tap ↻ AI to try again.`}
+}
 async function aiComment(combo){
   const groq=store.get('groqkey',''), gem=store.get('gemkey','');
   if(!groq&&!gem)return {ok:false,text:'Add a free Groq or Gemini key in About → Settings for AI commentary.'};
   const legs=(combo.legs||[]).map(l=>`${l.match||''} – ${l.sel||''} @ ${Number(l.odds).toFixed(2)}`).join('; ');
   const prompt=`You are a sports-betting risk analyst. Give a short (3-5 sentences) neutral commentary on this multi-leg combination. Mention overall risk, any stand-out legs, and clearly state that this is an informational estimate only — not betting, financial or investment advice and that no outcome is guaranteed. Odds ${combo.odds?.toFixed?.(2)||combo.odds}, combined implied probability about ${((combo.prob||0)*100).toFixed(1)}%, margin ${Number(combo.margin||0).toFixed(1)}%. Legs: ${legs}`;
+  const errs=[];
   if(groq){
-    try{
-      const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+groq},
-        body:JSON.stringify({model:'llama-3.1-8b-instant',messages:[{role:'user',content:prompt}],temperature:0.4,max_tokens:220})});
-      if(r.ok){const j=await r.json();const t=j.choices?.[0]?.message?.content?.trim();if(t)return{ok:true,text:t,src:'Groq'}}
-    }catch{}
+    // Groq retired llama-3.1-8b-instant (16 Aug 2026); gpt-oss-20b is their recommended replacement.
+    const gq=(extra)=>aiCall('Groq','https://api.groq.com/openai/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+groq},
+      body:JSON.stringify(Object.assign({model:'openai/gpt-oss-20b',messages:[{role:'user',content:prompt}],temperature:0.4,max_tokens:900},extra))},j=>j.choices?.[0]?.message?.content?.trim());
+    let r=await gq({reasoning_effort:'low'});
+    if(r.status===400&&!r.text)r=await gq({});
+    if(r.text)return{ok:true,text:r.text,src:'Groq'};
+    errs.push(r.err);
   }
   if(gem){
-    try{
-      const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key='+encodeURIComponent(gem),
-        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.4,maxOutputTokens:220}})});
-      if(r.ok){const j=await r.json();const t=j.candidates?.[0]?.content?.parts?.[0]?.text?.trim();if(t)return{ok:true,text:t,src:'Gemini'}}
-    }catch{}
+    // gemini-1.5-flash is shut down; "gemini-flash-latest" always points at Google's current Flash model.
+    for(const model of ['gemini-flash-latest','gemini-3.1-flash-lite']){
+      const r=await aiCall('Gemini','https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(gem),
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature:0.4,maxOutputTokens:1200}})},
+        j=>(j.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('').trim());
+      if(r.text)return{ok:true,text:r.text,src:'Gemini'};
+      if(r.status!==404){errs.push(r.err);break}
+      if(model==='gemini-3.1-flash-lite')errs.push(r.err);
+    }
   }
-  return{ok:false,text:'Could not reach AI. Check your key and network, then try Refresh.'};
+  return{ok:false,text:errs.join(' ')||'Could not reach AI. Check your key and network, then tap ↻ AI.'};
 }
 window.refreshAI=async function(i){
   const el=document.getElementById('ai-'+i);if(!el)return;
@@ -939,8 +964,8 @@ async function drawPlans(){await loadRates();const F=fmtLocal,cc=deviceCountry()
    ${paid?`<div class="muted" style="font-size:11px">PayPal price: $${PRICE_USD[key]} USD</div>`:''}
    <div class="cta">${cta}</div>
   </div>`};
- $('#plans').innerHTML=`<p class="muted">${region?`Prices shown for ${esc(region)}${code?' ('+code+')':''}. `:''}Estimates converted from USD; PayPal checkout is authoritative for the amount charged. After a successful payment the licence key is emailed to the PayPal account address.</p>
-  <p class="muted" style="font-size:12px">By purchasing you agree to our <a href="#" id="plans-terms" style="color:var(--ac)">Terms of Service</a> and <a href="#" id="plans-privacy" style="color:var(--ac)">Privacy Policy</a>.</p>
+ $('#plans').innerHTML=`<p class="muted">${(region&&code&&code!=='USD'&&fxRates[code])?`Prices shown for ${esc(region)} (${code}). Estimates converted from USD; `:(code==='USD'?'Prices shown in US dollars (USD). ':'Prices shown in US dollars (USD) — a local-currency estimate is not available right now. ')}PayPal checkout is authoritative for the amount charged. After a successful payment the licence key is emailed to the PayPal account address.</p>
+  <p class="muted" style="font-size:12px">By purchasing you agree to our <a href="#" id="plans-terms" style="color:var(--ac)">Terms of Service</a>, <a href="#" id="plans-privacy" style="color:var(--ac)">Privacy Policy</a> and <a href="#" id="plans-refunds" style="color:var(--ac)">Refund Policy</a>. <b>7-day money-back guarantee.</b></p>
  <div class="plans-grid">`
   +card('free','Free Forever','Free','','FREE FOREVER','For new users and casual bettors',['Basic live scores',`${FREE_ANALYSES_PER_DAY} bet-slip analysis per day`,'Basic odds & return calculations','Basic match information',`Save up to ${FREE_SAVED_SLIPS} slips`],'free')
   +card('monthly','PayPal 30 Day Access',F(PRICE_USD.monthly),'30 day access','RECOMMENDED','For regular bettors who want the full toolkit',['Everything in Free','Unlimited bet-slip analyses','Advanced stake tools (Kelly sizing)','Unlimited saved slips & results history','No auto-renewal'],'monthly')
@@ -951,9 +976,10 @@ async function drawPlans(){await loadRates();const F=fmtLocal,cc=deviceCountry()
   const go=()=>openPay(el.dataset.plan);
   el.onclick=go;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go()}};
  });
- const pt=document.getElementById('plans-terms'), pp=document.getElementById('plans-privacy');
+ const pt=document.getElementById('plans-terms'), pp=document.getElementById('plans-privacy'), pr=document.getElementById('plans-refunds');
  if(pt)pt.onclick=e=>{e.preventDefault();openLegal('Terms of Service', TERMS_HTML)};
  if(pp)pp.onclick=e=>{e.preventDefault();openLegal('Privacy Policy', PRIVACY_HTML)};
+ if(pr)pr.onclick=e=>{e.preventDefault();openLegal('Refund Policy', REFUND_HTML)};
 }
 
 // ---------- licence keys (same format as the desktop app: "MD1" + base32 of a 12-byte payload and a 64-byte Ed25519 signature) ----------
@@ -1015,61 +1041,192 @@ $('#alpushtest').onclick=async()=>{const st=$('#alpushst');try{const reg=await n
 if(store.get('push',false)&&pushOK()&&Notification.permission==='granted')syncPushSoon();else if(store.get('push',false)){store.set('push',false);$('#alpush').checked=false}
 
 
-// ---------- Terms of Service & Privacy Policy ----------
+// ---------- Terms of Service, Privacy Policy, Refund Policy & Responsible Gambling ----------
+// Optional: fill these in and they appear automatically in the Terms (South African law expects
+// a seller to show its registration number and physical address). Leave empty to hide the line.
+const LEGAL_REG = '';      // e.g. 'Reg. no. 2024/123456/07'
+const LEGAL_ADDR = '';     // e.g. '12 Example Street, Pretoria, 0001, South Africa'
+const LEGAL_UPDATED = '27 October 2026';
+
 const TERMS_HTML = `
+<p class="muted">Please read these Terms carefully. By using MatchDesk or buying access you agree to them, to our <b>Privacy Policy</b>, and to our <b>Refund Policy</b>.</p>
 <h4>1. Who we are</h4>
-<p>MatchDesk is operated by <b>Tri-Star (Pty) Ltd</b> ("we", "us"). Contact: Matchdesksupport@gmail.com.</p>
-<h4>2. What MatchDesk is</h4>
-<p>MatchDesk is an <b>informational tool</b>. It provides live scores, bet-slip analysis, estimated fair probabilities, risk ratings, optional form notes and optional AI commentary. It does <b>not</b> accept bets, hold funds, pay winnings, or provide betting, financial or investment advice.</p>
-<h4>3. Eligibility</h4>
-<p>You must be <b>18 years or older</b> and legally allowed to use gambling-related information services in your jurisdiction. By using the app you confirm you meet this requirement.</p>
-<h4>4. Accounts, keys and subscriptions</h4>
+<p>MatchDesk is operated by <b>Tri-Star (Pty) Ltd</b> ("we", "us", "our"), a company registered in South Africa.${LEGAL_REG?` ${LEGAL_REG}.`:''}${LEGAL_ADDR?` Address: ${LEGAL_ADDR}.`:''} Contact: <b>Matchdesksupport@gmail.com</b>.</p>
+<h4>2. What MatchDesk is, and is not</h4>
+<p>MatchDesk is an <b>informational tool</b>. It shows live scores, analyses bet slips, estimates fair probabilities and risk, and can show optional form notes and AI commentary. MatchDesk is <b>not</b> a bookmaker. We do not accept bets, hold your money, pay winnings, or give betting, financial, investment or legal advice. We are not affiliated with, endorsed by, or sponsored by any bookmaker.</p>
+<h4>3. Eligibility and local law</h4>
 <ul>
-<li>Free features are available without payment, subject to fair-use limits that may change.</li>
-<li>Paid access (e.g. 30-day or 1-year) is purchased via PayPal. After successful payment a licence key is emailed to the PayPal account address.</li>
-<li>Keys do not auto-renew. When a key expires the app continues on the Free plan.</li>
-<li>We may refuse, suspend or revoke a key in cases of abuse, chargebacks, or material breach of these Terms.</li>
+<li>You must be <b>18 or older</b> (or the legal gambling age where you live, if higher).</li>
+<li>You must be legally allowed to use gambling-related information services where you are. <b>You are responsible for checking and obeying the laws that apply to you.</b> Do not use MatchDesk where it is unlawful.</li>
+<li>If we believe you are under age or using the service unlawfully, we may stop your access.</li>
 </ul>
-<h4>5. Acceptable use</h4>
-<p>You may use MatchDesk for personal, lawful purposes. You must not: reverse-engineer or attack the service; use it to break any bookmaker’s terms in a way that creates liability for us; scrape or overload our servers; or misrepresent MatchDesk outputs as guaranteed predictions or professional advice.</p>
-<h4>6. Estimates only — no advice, no guarantees</h4>
-<p>All analysis, probabilities, risk ratings, form notes and AI text are <b>estimates only</b>. They are not predictions, tips, or advice. No outcome is guaranteed. Past results and historical data do not predict future performance. You alone decide whether and how to wager and you do so entirely at your own risk.</p>
-<h4>7. Limitation of liability</h4>
-<p>To the fullest extent permitted by South African law, Tri-Star (Pty) Ltd, its directors and contributors are not liable for any loss, damage, or consequence arising from your use of MatchDesk or reliance on any output. Nothing in these Terms limits liability that cannot legally be limited (including for gross negligence or under the Consumer Protection Act where it applies).</p>
-<h4>8. Third-party services</h4>
-<p>Live scores use public ESPN endpoints. Optional form data and AI commentary use third-party APIs you configure. Booking-code loading reads public share pages. PayPal processes payments. Those services have their own terms; we are not responsible for their availability or content.</p>
-<h4>9. Changes</h4>
-<p>We may update these Terms. Continued use after changes constitutes acceptance of the updated Terms. Material changes to paid plans will be communicated reasonably in advance where practical.</p>
-<h4>10. Governing law</h4>
-<p>These Terms are governed by the laws of the Republic of South Africa. Courts of South Africa have jurisdiction, subject to any non-excludable consumer rights.</p>
-<p class="muted">Last updated: October 2026</p>
+<h4>4. Licence, plans and keys</h4>
+<ul>
+<li><b>Free plan:</b> available without payment, with fair-use limits (for example a daily number of analyses and saved slips). We may change these limits.</li>
+<li><b>Paid plans</b> (for example 30-day or 1-year access) give you the Pro features for the period you bought. Plans are bought through PayPal. After payment a licence key is emailed to your PayPal account email address. Delivery is normally prompt, but can take longer; check your spam folder and contact us if nothing arrives within 24 hours.</li>
+<li><b>No automatic renewal.</b> When a key expires the app continues on the Free plan. We will never charge you again unless you buy again yourself.</li>
+<li><b>Personal licence.</b> A key gives <b>you</b> a personal, non-exclusive, non-transferable right to use the Pro features on your own devices. You must not share, publish, resell or give away your key, or post it online. Keep it private like a password.</li>
+<li>We may refuse, suspend or deactivate a key if it is shared or resold, obtained by fraud, linked to a charge-back or payment dispute you did not first raise with us, or used in breach of these Terms. If we deactivate a key and you did not breach these Terms, we will refund the unused part of your plan.</li>
+<li>If you lose your key, contact us from your PayPal email with your PayPal transaction ID and we will resend it.</li>
+</ul>
+<h4>5. Prices and payment</h4>
+<ul>
+<li>Prices are set in US dollars. Amounts shown in other currencies are <b>estimates</b> from exchange rates; the amount PayPal shows at checkout is the amount charged.</li>
+<li>Payments are handled by PayPal under PayPal's own terms. We never see or store your card details.</li>
+<li>If you have a problem with a payment, please contact us first. We can usually fix it faster than a dispute process can.</li>
+</ul>
+<h4>6. Refunds and cancellation</h4>
+<p>We offer a <b>7-day money-back guarantee</b> on your purchase. The full rules are in the <b>Refund Policy</b> (About &rarr; Legal), which forms part of these Terms. Nothing in these Terms removes any refund, cancellation or cooling-off right that the law gives you and that cannot be waived.</p>
+<h4>7. Acceptable use</h4>
+<p>You may use MatchDesk for personal, lawful purposes. You must not:</p>
+<ul>
+<li>copy, reverse-engineer, decompile, tamper with, or try to bypass the licence checks or usage limits of the app or service;</li>
+<li>attack, overload, scrape or probe our servers, or use automated tools to call our service (including the booking-code loader) at scale;</li>
+<li>resell, sub-license or build a competing service from MatchDesk;</li>
+<li>use MatchDesk in a way that breaks a bookmaker's rules or the law, or that exposes us to liability;</li>
+<li>present MatchDesk outputs to others as guaranteed predictions, tips or professional advice.</li>
+</ul>
+<h4>8. Third-party services and bookmakers</h4>
+<ul>
+<li><b>Bookmakers.</b> Bookmaker names and logos belong to their owners and are used only to identify the service you choose. The booking-code loader fetches the public share page for a code <b>you</b> enter, so you can analyse that slip. Bookmakers can change or restrict their websites at any time, so the loader may work only sometimes, or stop working, and we do not promise that any particular bookmaker will be supported. You can always paste your slip instead. You remain responsible for following each bookmaker's own terms.</li>
+<li><b>Data and APIs.</b> Live scores use public ESPN data. Optional form data uses football-data.org, and optional AI commentary uses Groq or Google Gemini with <b>your own</b> API key and account. Those services have their own terms, limits and costs, and may change or end. We are not responsible for their availability, accuracy or charges.</li>
+<li><b>PayPal</b> processes payments; <b>our hosting and infrastructure providers</b> run the service.</li>
+</ul>
+<h4>9. Estimates only: no advice, no guarantees</h4>
+<p>All analysis, probabilities, risk ratings, Kelly-style stake figures, form notes and AI text are <b>estimates produced by software</b>. They can be wrong. They are not predictions, tips or advice, and no result is guaranteed. Past results do not predict future ones. Odds, scores and data may be delayed, incomplete or inaccurate. <b>Whether, how much and where you bet is entirely your decision and at your own risk.</b> Never bet money you cannot afford to lose.</p>
+<h4>10. Responsible gambling</h4>
+<p>Gambling can be addictive. If it is causing you or someone you know harm, please stop and get help &mdash; see the <b>Responsible Gambling</b> panel in About &rarr; Legal for support lines.</p>
+<h4>11. Availability and changes to the service</h4>
+<p>We work to keep MatchDesk running, but it is provided "as is" and "as available". It may be interrupted for maintenance, fail because of third-party services, or change over time. We may add, change or remove features, and we will try to avoid removing something you have paid for without a fair remedy (see the Refund Policy).</p>
+<h4>12. Intellectual property</h4>
+<p>MatchDesk's software, design, text and branding belong to us or our licensors. You receive only the limited right of use in section 4. Third-party data and marks belong to their owners.</p>
+<h4>13. Limitation of liability</h4>
+<p>To the fullest extent permitted by law, we are not liable for any loss or damage (including betting losses, lost winnings, lost profits, or indirect or consequential loss) arising from your use of, or inability to use, MatchDesk, or from relying on any output. Where liability cannot legally be excluded, it is limited, to the extent the law allows, to the amount you paid us in the 12 months before the claim. Nothing in these Terms excludes or limits liability that cannot be excluded or limited by law, including for fraud, gross negligence, or your rights under the South African <b>Consumer Protection Act 68 of 2008</b> where it applies.</p>
+<h4>14. Suspension and ending</h4>
+<p>You may stop using MatchDesk at any time. We may suspend or end your access if you seriously or repeatedly breach these Terms. Sections that by their nature should survive (for example 9, 12, 13 and 17) continue after the service ends.</p>
+<h4>15. Changes to these Terms</h4>
+<p>We may update these Terms. The "last updated" date below will change. For material changes affecting a plan you have already paid for, we will give reasonable notice where practical. Continuing to use MatchDesk after a change means you accept the updated Terms.</p>
+<h4>16. Contact and complaints</h4>
+<p>Questions or complaints: <b>Matchdesksupport@gmail.com</b>. We will try to resolve your complaint fairly. South African consumers may also approach the National Consumer Commission or the relevant ombud.</p>
+<h4>17. Governing law</h4>
+<p>These Terms are governed by the laws of the Republic of South Africa, and its courts have jurisdiction, <b>subject to</b> any mandatory consumer-protection rights you have under the law of the country where you live.</p>
+<h4>18. General</h4>
+<p>If any part of these Terms is found unenforceable, the rest still applies. If we do not enforce a right straight away, we have not given it up. These Terms, the Privacy Policy and the Refund Policy are the whole agreement between you and us about MatchDesk.</p>
+<p class="muted">Last updated: ${LEGAL_UPDATED}</p>
+`;
+
+const REFUND_HTML = `
+<p><b>In short:</b> if you are not happy, ask for your money back <b>within 7 days of paying</b> and we will refund you in full. If your key never arrives or does not work, we will fix it or refund you.</p>
+<h4>1. 7-day money-back guarantee</h4>
+<p>You may ask for a full refund of any paid plan (30-day or 1-year) within <b>7 days</b> of your payment date, for any reason. This applies to your first purchase of each plan type. You do not need to explain why.</p>
+<h4>2. How to ask</h4>
+<ol>
+<li>Email <b>Matchdesksupport@gmail.com</b> from your PayPal email address.</li>
+<li>Put "Refund" in the subject and include your <b>PayPal transaction ID</b> (it is in your PayPal receipt email).</li>
+<li>We aim to reply within 2 business days. Approved refunds go back to the <b>same PayPal account</b> you paid with. PayPal usually shows them immediately and may take a few days to reach your bank or card.</li>
+</ol>
+<p>After a refund, that key must no longer be used and we may deactivate it. Your app simply continues on the Free plan.</p>
+<h4>3. Key not received, or not working</h4>
+<p>If your licence key does not arrive within 24 hours (check spam and junk first), or it will not activate, contact us. We will send a working key or, if we cannot solve it, <b>refund you in full</b> &mdash; including after the 7 days, for up to 30 days from payment.</p>
+<h4>4. Features that stop working</h4>
+<p>Some features depend on outside services (for example bookmaker share pages, ESPN data, or your own AI keys). We try to keep them working, but cannot control those services. If a major paid feature stays broken for a long time because of an outside change and we cannot fix it, you may ask for a <b>pro-rata refund</b> for the unused part of your plan, and we will consider it fairly.</p>
+<h4>5. What we cannot refund</h4>
+<ul>
+<li>Requests made after the refund period, except as set out in sections 3 and 4 or where the law requires a refund.</li>
+<li>Money lost or not won on bets. MatchDesk is an informational tool that gives estimates, not guaranteed results.</li>
+<li>Costs of third-party accounts or API keys you set up yourself (such as Groq or Google).</li>
+<li>Currency-conversion or bank fees charged by your bank or PayPal, where they are outside our control.</li>
+</ul>
+<h4>6. Cancelling</h4>
+<p>Plans <b>do not renew automatically</b>, so there is nothing to cancel and we will not charge you again unless you buy again. If you see an unexpected charge, tell us straight away and we will investigate and refund it where it is an error.</p>
+<h4>7. Disputes and charge-backs</h4>
+<p>Please contact us before opening a PayPal dispute or card charge-back; we can usually sort things out faster. If a dispute is opened, we will respond to PayPal with our records.</p>
+<h4>8. Your legal rights</h4>
+<p>This policy is in addition to your legal rights. Nothing here limits any right you have under the law, including (where they apply) the South African Consumer Protection Act and Electronic Communications and Transactions Act, and the consumer-protection rules of the UK, EU or other place where you live, including any statutory cooling-off period for digital purchases. Where the law gives you a better right than this policy, the law applies.</p>
+<p class="muted">Last updated: ${LEGAL_UPDATED}</p>
+`;
+
+const RG_HTML = `
+<p>MatchDesk is for information only. Betting should be entertainment, never a way to make money or to chase losses.</p>
+<h4>Keep it safe</h4>
+<ul>
+<li>Only bet what you can afford to lose, and set a budget before you start.</li>
+<li>Set deposit and time limits with your bookmaker, and use their cool-off or self-exclusion tools.</li>
+<li>Do not chase losses, and do not bet when upset, stressed, tired or after drinking.</li>
+<li>Remember that no tool, tip or estimate (including MatchDesk) can guarantee a result.</li>
+<li>Bets are for adults only (18+). Do not let anyone under 18 use your betting accounts.</li>
+</ul>
+<h4>Warning signs</h4>
+<ul>
+<li>Betting more than you planned, or hiding how much you bet.</li>
+<li>Borrowing money or missing bills to bet.</li>
+<li>Feeling anxious, irritable or low when you are not betting.</li>
+</ul>
+<h4>Get free, confidential help</h4>
+<ul>
+<li><b>South Africa:</b> South African Responsible Gambling Foundation &mdash; toll-free <b>0800 006 008</b> (responsiblegambling.org.za).</li>
+<li><b>United Kingdom:</b> National Gambling Helpline (GamCare) &mdash; <b>0808 8020 133</b> (gamcare.org.uk); BeGambleAware (begambleaware.org).</li>
+<li><b>United States:</b> <b>1-800-GAMBLER</b>.</li>
+<li><b>Elsewhere:</b> search for your country's national gambling helpline, or ask your doctor.</li>
+</ul>
+<p class="muted">Helpline details can change. If a number does not connect, search online for the organisation's current contact details.</p>
 `;
 
 const PRIVACY_HTML = `
-<h4>1. Introduction</h4>
-<p>Tri-Star (Pty) Ltd ("we") respects your privacy. This Policy explains what information MatchDesk processes and why, in line with the Protection of Personal Information Act 4 of 2013 (POPIA).</p>
-<h4>2. What we process</h4>
+<p class="muted">This Policy explains what personal information MatchDesk handles and why. It follows South Africa's <b>Protection of Personal Information Act 4 of 2013 (POPIA)</b> and also covers the UK and EU <b>GDPR</b> and, briefly, US state privacy laws.</p>
+<h4>1. Who is responsible</h4>
+<p><b>Tri-Star (Pty) Ltd</b> is the "responsible party" under POPIA and the "controller" under GDPR. Contact and Information Officer: <b>Matchdesksupport@gmail.com</b>.</p>
+<h4>2. What we handle</h4>
 <ul>
-<li><b>On your device only:</b> tracked teams, saved slips/history, alert preferences, optional API keys (Football-Data, Groq, Gemini), and licence key status. This data stays in your browser storage unless you clear it.</li>
-<li><b>When you buy access:</b> PayPal processes your payment. We receive confirmation and the email address needed to send your licence key. We do not store full card details.</li>
-<li><b>If you enable push notifications:</b> a push subscription endpoint is stored on our server so we can send goal/kick-off/full-time alerts for teams you track.</li>
-<li><b>Technical logs:</b> standard server logs (IP, time, request path) for security, rate-limiting and diagnostics, retained for a limited period.</li>
+<li><b>On your device only:</b> tracked teams, saved slips and history, settings, your optional API keys (Football-Data, Groq, Gemini), and your licence key and its status. This stays in your browser storage on your device and is not sent to us. Clearing your browser or app data removes it, including your licence key, so keep a copy of your key.</li>
+<li><b>When you buy:</b> PayPal processes your payment and gives us your name, PayPal email address, country, the amount and the transaction ID. We use these to send your key, give support, handle refunds and meet tax and accounting duties. We never receive your card details.</li>
+<li><b>Booking-code loading:</b> when you load a code, the code (or link) and chosen bookmaker are sent to our server, which fetches the public share page for you, using a remote browser service where configured. The result is kept in the server's short-term memory for a few minutes and is not stored permanently.</li>
+<li><b>Form data (optional):</b> if you add a Football-Data key, your requests pass through our server to football-data.org. Your key is not written to disk by us.</li>
+<li><b>Push notifications (optional):</b> if you switch them on, we store your browser's push subscription (an address used to reach your device) and the teams you track, so we can send goal, kick-off and full-time alerts. Turn them off in About to remove the subscription.</li>
+<li><b>AI commentary (optional):</b> if you add a Groq or Gemini key, the slip details you ask about (teams, selections, odds) are sent <b>straight from your device</b> to that provider under your own account. We do not see them.</li>
+<li><b>Support:</b> your emails to us and our replies.</li>
+<li><b>Technical data:</b> our hosting provider and server may record your IP address, device/browser type, time and requested address, for security, abuse prevention (rate-limiting) and fixing faults.</li>
 </ul>
-<h4>3. Why we process it</h4>
-<p>To provide the service you request (analysis, scores, alerts, licence activation), to secure the service, to communicate about your purchase, and to meet legal obligations.</p>
+<h4>3. Why we use it, and our legal basis</h4>
+<ul>
+<li><b>To provide the service and your purchase</b> (contract) &mdash; scores, analysis, key delivery, support, refunds.</li>
+<li><b>To keep the service secure and fair</b> (legitimate interests) &mdash; stopping abuse, fraud and overload.</li>
+<li><b>Push alerts</b> (your consent) &mdash; you can withdraw it any time by switching alerts off.</li>
+<li><b>To meet legal duties</b> (legal obligation) &mdash; tax, accounting, responding to lawful requests.</li>
+</ul>
 <h4>4. Sharing</h4>
-<p>We do not sell your personal information. We share data only with: payment processors (PayPal), infrastructure providers necessary to run the service, and authorities if legally required. Optional third-party AI/form APIs are called only when you supply a key and request those features; those requests go from your device or our server under your control.</p>
-<h4>5. Cross-border transfers</h4>
-<p>Payment and some infrastructure providers may process data outside South Africa. Where POPIA requires, we take reasonable steps to ensure appropriate protection.</p>
-<h4>6. Security and retention</h4>
-<p>We apply reasonable technical and organisational measures. Licence and push data are kept only as long as needed for the service or legal requirements. You can clear local app data in your browser at any time.</p>
-<h4>7. Your rights (POPIA)</h4>
-<p>You may request access to, correction of, or deletion of personal information we hold about you, or object to certain processing. Contact Matchdesksupport@gmail.com. You may also lodge a complaint with the Information Regulator (inforegulator.org.za).</p>
-<h4>8. Children</h4>
-<p>MatchDesk is for users 18+. We do not knowingly collect personal information from children.</p>
-<h4>9. Contact / Information Officer</h4>
-<p>For privacy requests: Matchdesksupport@gmail.com (Tri-Star (Pty) Ltd).</p>
-<p class="muted">Last updated: October 2026</p>
+<p>We <b>do not sell</b> your personal information and we do not share it for cross-context advertising. We share it only with service providers that help us run MatchDesk, who may use it only for that purpose: <b>PayPal</b> (payments), <b>our hosting provider</b> (running the service), <b>a remote-browser provider</b> (booking-code loading), and <b>our email provider</b> (sending keys and support replies). Public data is fetched from ESPN, football-data.org and an exchange-rate service; those requests do not include your name or email. We may also disclose information where the law requires it, or to protect rights and safety.</p>
+<h4>5. Advertising</h4>
+<p>If we show adverts from a third-party network, that network may use cookies or similar identifiers. Where the law requires, we will ask for your consent first and explain the details here. Advertisers do not get your licence key or purchase details.</p>
+<h4>6. Cookies and local storage</h4>
+<p>MatchDesk uses your browser's local storage and a service-worker cache so the app works, remembers your settings and works offline. We do not use our own tracking or advertising cookies.</p>
+<h4>7. Sending information abroad</h4>
+<p>Our providers (for example PayPal, hosting and email) may process data outside your country, including outside South Africa, the UK and the EEA. Where the law requires, we rely on appropriate safeguards such as adequacy decisions, standard contractual clauses or equivalent protections.</p>
+<h4>8. How long we keep it</h4>
+<ul>
+<li><b>Payment and key records:</b> as long as needed for support, refunds and the tax and accounting periods that apply to us (normally up to 5 years).</li>
+<li><b>Push subscriptions:</b> until you turn alerts off, the subscription expires, or you ask us to delete it.</li>
+<li><b>Support emails:</b> up to 3 years after the matter is closed, unless we must keep them longer.</li>
+<li><b>Server and hosting logs:</b> a limited period set by the provider, normally weeks.</li>
+<li><b>Booking-code results:</b> a few minutes, in memory only.</li>
+</ul>
+<h4>9. Security and breaches</h4>
+<p>We use reasonable technical and organisational measures, including encrypted connections (HTTPS). No system is perfectly secure. If a breach affects your personal information, we will notify you and the regulator where the law requires.</p>
+<h4>10. Your rights</h4>
+<p>Depending on where you live, you may ask us to: give you a copy of your personal information; correct it; delete it; restrict or object to our use of it; give it to you in a portable format; or stop processing based on your consent. Email <b>Matchdesksupport@gmail.com</b>; we may need to confirm who you are first, and we aim to respond within 30 days. You will not be treated worse for using your rights.</p>
+<ul>
+<li><b>South Africa:</b> you may complain to the <b>Information Regulator</b> (inforegulator.org.za).</li>
+<li><b>United Kingdom:</b> you may complain to the <b>Information Commissioner's Office</b> (ico.org.uk).</li>
+<li><b>EU/EEA:</b> you may complain to the data-protection authority in your country.</li>
+<li><b>California and other US states:</b> you may ask what we hold and ask us to delete it. We do not sell or share personal information.</li>
+</ul>
+<h4>11. Automated decisions</h4>
+<p>MatchDesk's analysis, risk ratings and AI commentary are automated <b>estimates to inform you</b>. They do not make decisions with legal or similarly significant effects about you.</p>
+<h4>12. Children</h4>
+<p>MatchDesk is for adults aged 18+. We do not knowingly collect information from anyone under 18. If you think a child has given us information, contact us and we will delete it.</p>
+<h4>13. Changes</h4>
+<p>We may update this Policy. The date below will change, and we will take reasonable steps to tell you about important changes.</p>
+<p class="muted">Last updated: ${LEGAL_UPDATED}</p>
 `;
 
 function openLegal(title, html){
@@ -1090,6 +1247,8 @@ function closeLegal(){
 }
 document.getElementById('btn-terms')?.addEventListener('click', ()=>openLegal('Terms of Service', TERMS_HTML));
 document.getElementById('btn-privacy')?.addEventListener('click', ()=>openLegal('Privacy Policy', PRIVACY_HTML));
+document.getElementById('btn-refunds')?.addEventListener('click', ()=>openLegal('Refund Policy', REFUND_HTML));
+document.getElementById('btn-rg')?.addEventListener('click', ()=>openLegal('Responsible Gambling', RG_HTML));
 document.getElementById('legal-close')?.addEventListener('click', closeLegal);
 document.getElementById('legal-backdrop')?.addEventListener('click', closeLegal);
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeLegal(); });

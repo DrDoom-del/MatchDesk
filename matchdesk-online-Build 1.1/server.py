@@ -1,5 +1,5 @@
 """MatchDesk online server: serves the web app AND loads booking codes (/api/resolve) for any device."""
-import os, re, json, time, hashlib, threading, pathlib, mimetypes, urllib.parse, requests
+import os, re, json, time, hashlib, threading, pathlib, mimetypes, urllib.parse, ipaddress, requests
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import resolver as R
 import push as P
@@ -44,15 +44,54 @@ _hits, _cache, _lock = {}, {}, threading.Lock()
 FD_OK = re.compile(r"^(competitions/[A-Z0-9]{2,5}/(teams|standings)|teams/\d{1,8}/matches)$")   # only the calls the app needs
 _fdcache = {}
 
+GLOBAL_RATE = int(os.environ.get("MD_GLOBAL_RATE_PER_MIN", "40"))       # all users together, per minute (0 = off)
+DAILY_CAP = int(os.environ.get("MD_DAILY_CAP", "3000"))                 # all users together, per day (0 = off)
+TRUSTED_PROXIES = int(os.environ.get("MD_TRUSTED_PROXIES", "0"))        # see client_ip()
+_g_hits, _day = [], {"d": "", "n": 0}
+
+def client_ip(h):
+    """Best-effort real visitor IP.
+    1) Cloudflare's CF-Connecting-IP (Render sits behind Cloudflare, which overwrites this header, so visitors cannot fake it).
+    2) If MD_TRUSTED_PROXIES=N is set, the Nth address from the right of X-Forwarded-For (the one our own proxies added).
+    3) Otherwise the old behaviour: first X-Forwarded-For entry, else the socket address.
+    Anything that is not a valid IP address is ignored."""
+    peer = h.client_address[0]
+    cand = (h.headers.get("CF-Connecting-IP") or "").strip()
+    if not cand:
+        parts = [x.strip() for x in (h.headers.get("X-Forwarded-For") or "").split(",") if x.strip()]
+        if parts:
+            cand = parts[-TRUSTED_PROXIES] if 0 < TRUSTED_PROXIES <= len(parts) else parts[0]
+    try:
+        return str(ipaddress.ip_address(cand))
+    except ValueError:
+        return peer
+
 def allowed(ip):
     now = time.time()
     with _lock:
+        if len(_hits) > 5000:                                   # keep memory bounded
+            for k in [k for k, v in _hits.items() if not v or now - v[-1] >= 60]:
+                _hits.pop(k, None)
         h = [t for t in _hits.get(ip, []) if now - t < 60]
         if len(h) >= RATE:
             _hits[ip] = h
             return False
         h.append(now); _hits[ip] = h
     return True
+
+def global_ok():
+    """Server-wide safety valve: returns None if OK, otherwise a message for the user."""
+    now = time.time(); day = time.strftime("%Y-%m-%d", time.gmtime(now))
+    with _lock:
+        _g_hits[:] = [t for t in _g_hits if now - t < 60]
+        if GLOBAL_RATE and len(_g_hits) >= GLOBAL_RATE:
+            return "MatchDesk is very busy right now – please try again in a few minutes."
+        if _day["d"] != day:
+            _day["d"], _day["n"] = day, 0
+        if DAILY_CAP and _day["n"] >= DAILY_CAP:
+            return "The daily code-loading limit has been reached. Please paste the slip text instead, or try again tomorrow."
+        _g_hits.append(now); _day["n"] += 1
+    return None
 
 class H(BaseHTTPRequestHandler):
     def _json(self, code, obj):
@@ -111,21 +150,37 @@ class H(BaseHTTPRequestHandler):
                     pass
             return self._json(200 if hit else 502, hit[1] if hit else {"result": "error"})
         if u.path == "/api/selftest":
-            ip = (self.headers.get("X-Forwarded-For") or self.client_address[0]).split(",")[0].strip()
+            ip = client_ip(self)
+            with _lock: st_hit = _cache.get("selftest")
+            if st_hit and time.time() - st_hit[0] < 60:
+                return self._json(200, st_hit[1])
             if not allowed(ip): return self._json(429, {"ok": False, "steps": [], "fix": "", "engine": ENGINE})
+            if global_ok(): return self._json(429, {"ok": False, "steps": [], "fix": "", "engine": ENGINE})
             if not SEM.acquire(timeout=30): return self._json(503, {"ok": False, "steps": [], "fix": "", "engine": ENGINE})
-            try: return self._json(200, selftest())
+            try:
+                st_res = selftest()
+                with _lock: _cache["selftest"] = (time.time(), st_res)
+                return self._json(200, st_res)
             finally: SEM.release()
         if u.path == "/api/resolve":
             code = (q.get("code") or [""])[0][:500]; bookie = (q.get("bookie") or ["Auto"])[0] or "Auto"
-            ip = (self.headers.get("X-Forwarded-For") or self.client_address[0]).split(",")[0].strip()
+            ip = client_ip(self)
             key = (code.strip().lower(), bookie)
             with _lock:
                 hit = _cache.get(key)
             if hit and time.time() - hit[0] < CACHE_SECS:
                 return self._json(200, hit[1])
+            c_ = code.strip()
+            try:
+                if re.match(r"(?i)^https?://", c_) and not R._url_allowed(c_, R.load_bookie_lookup()):
+                    return self._json(200, {"ok": False, "text": "", "message": "That link is not from a supported bookmaker. Paste the booking code itself, or paste the slip text and click Analyze."})
+            except Exception:
+                pass
             if not allowed(ip):
                 return self._json(429, {"ok": False, "text": "", "message": "Too many lookups – please wait a minute and try again."})
+            busy = global_ok()
+            if busy:
+                return self._json(429, {"ok": False, "text": "", "message": busy})
             if not SEM.acquire(timeout=60):
                 return self._json(503, {"ok": False, "text": "", "message": "The server is busy – try again in a moment."})
             try:
@@ -153,7 +208,7 @@ class H(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(b)
 
     def do_POST(self):
-        u = urllib.parse.urlparse(self.path); ip = (self.headers.get("X-Forwarded-For") or self.client_address[0]).split(",")[0].strip()
+        u = urllib.parse.urlparse(self.path); ip = client_ip(self)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             if n > 20000: return self._json(413, {"ok": False})

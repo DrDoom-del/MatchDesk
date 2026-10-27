@@ -39,6 +39,9 @@ Then open http://localhost:8080
 | `MD_CONCURRENCY` | 2 | lookups running at the same time |
 | `MD_CACHE_SECS` | 300 | how long a loaded code is remembered |
 | `MD_ORIGIN` | * | restrict which websites may call the API |
+| `MD_GLOBAL_RATE_PER_MIN` | 40 | code lookups for ALL users together per minute (0 = off) |
+| `MD_DAILY_CAP` | 3000 | code lookups for ALL users together per day, UTC (0 = off) |
+| `MD_TRUSTED_PROXIES` | 0 | advanced: how many proxies sit in front of the server; only needed if `CF-Connecting-IP` is missing |
 
 ## Important to know
 - Bookmaker sites may block requests from cloud servers (they often block data-centre addresses), or change their pages.
@@ -60,7 +63,7 @@ Check the advertising rules for gambling-related content in your country, and ea
 ## Plans & pricing
 Prices follow your desktop app: Free, PayPal 30 Day Access ($4.99 USD) and 1 Year Access ($49.99 USD). They are shown in the device's local currency as an
 estimate (live exchange rates, USD fallback) with PayPal as the authority on the amount charged. The PayPal links are in `web/app.js` (PAYPAL).
-Licence keys are still issued by email after payment, as in the desktop app; in-app key entry and the Free-plan daily limit are not built yet.
+Licence keys are still issued by email after payment, as in the desktop app; in-app key entry (About -> Licence & Plans) and the Free-plan daily limit are built (see `licensing` in `web/config.js`).
 
 ## Push notifications (alerts even when the app is closed)
 Turn on **About → Goal alerts → Push notifications**. The server watches the scores of everything people track and sends goal, kick-off and
@@ -77,5 +80,13 @@ and sees the suggested share of bankroll and stake amount. Suggestions are cappe
 ## Licence keys
 About → License & Plans has the key box. Keys use the desktop format (MD1…); the public key is in `web/config.js` (same as the desktop app).
 Desktop keys that are locked to one computer cannot unlock the web app: ask the keygen for a key with no computer lock.
-Free-plan limits (1 analysis a day, 5 saved slips) are off until you set `licensing.enforce: true` in `web/config.js`; Pro keys and the 7-day trial are never limited.
+Free-plan limits (1 analysis a day, 5 saved slips) apply while `licensing.enforce` is `true` in `web/config.js` (currently on); Pro keys and the 7-day trial are never limited.
 Support address shown in the app: Matchdesksupport@gmail.com.
+
+
+## Security notes (added)
+
+- Booking-code links: pasting a full URL only works for the bookmakers' own domains (anything else is refused). This stops the server being used to fetch arbitrary or internal addresses.
+- Visitor IP for rate-limiting uses Cloudflare's `CF-Connecting-IP` header when present, so it cannot be faked with `X-Forwarded-For`.
+- `/api/selftest` results are cached for 60 seconds. Point uptime pingers at `/api/ping`, not `/api/selftest`.
+- Legal text (Terms, Privacy, Refund Policy, Responsible Gambling) lives in `web/app.js`. Fill in `LEGAL_REG` and `LEGAL_ADDR` at the top of that section to show your registration number and address in the Terms.

@@ -703,6 +703,45 @@ def fetch_betway_booking(code, timeout_ms=45000):
                           "(it may be expired or invalid).")
     return legs, _betway_legs_to_text(legs), "Loaded from Betway."
 
+# ---- Security: only fetch pages from the bookmakers we know about (stops server-side request forgery) ----
+def _base_domain(host):
+    parts = [p for p in (host or "").lower().strip(".").split(".") if p]
+    if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in ("co", "com", "org", "net", "gov", "ac"):
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:]) if len(parts) >= 2 else ".".join(parts)
+
+def _allowed_bookie_domains(cfg_all=None):
+    urls = list(BOOKIE_SITES.values())
+    for c in (cfg_all or {}).values():
+        if isinstance(c, dict):
+            urls.append(c.get("url") or "")
+            urls.extend(c.get("alt_urls") or [])
+    doms = set()
+    for u in urls:
+        try:
+            h = urllib.parse.urlparse(str(u).replace("{code}", "x")).hostname
+        except Exception:
+            h = None
+        if h:
+            doms.add(_base_domain(h))
+    return doms
+
+def _url_allowed(url, cfg_all=None):
+    try:
+        p = urllib.parse.urlparse(str(url).strip())
+        host = (p.hostname or "").lower()
+        if p.scheme not in ("http", "https") or not host:
+            return False
+        if p.port not in (None, 80, 443):
+            return False
+        for d in _allowed_bookie_domains(cfg_all):
+            if host == d or host.endswith("." + d):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def resolve_booking_code(code, bookie):
     """Returns (slip_text_or_None, message). Never raises.
     Flow:
@@ -736,6 +775,11 @@ def resolve_booking_code(code, bookie):
     tries = []
 
     if re.match(r"(?i)^https?://", code):
+        if not _url_allowed(code, cfg_all):
+            return None, (
+                "That link is not from a supported bookmaker. "
+                "Paste the booking code itself, or paste the slip text and click Analyze."
+            )
         tries.append((code, {}, {"odds": "odds", "spa": True}))
     else:
         # Prefer the selected bookie, else any with a URL
@@ -801,6 +845,9 @@ def resolve_booking_code(code, bookie):
             h = dict(headers_base)
             h.update(hdr)
             r = requests.get(url, headers=h, timeout=15)
+            if not _url_allowed(r.url, cfg_all):
+                last_err = "The bookmaker redirected somewhere unexpected."
+                continue
             if r.status_code != 200:
                 last_err = f"Server replied {r.status_code}."
                 continue
