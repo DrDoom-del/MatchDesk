@@ -112,7 +112,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
-        if u.path == "/.well-known/assetlinks.json":
+        if u.path == "/api/ping":
             return self._json(200, {"ok": True, "server": "matchdesk", "playwright": R.HAS_PLAYWRIGHT, "engine": ENGINE})
         if u.path.startswith("/api/fd/"):                      # Football-Data proxy (the user's own key, passed through)
             path = u.path[8:]; key = self.headers.get("X-Auth-Token", "")
