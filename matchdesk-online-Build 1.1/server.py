@@ -112,6 +112,21 @@ class H(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path); q = urllib.parse.parse_qs(u.query)
+             if u.path == "/.well-known/assetlinks.json":
+            try:
+                fp = os.path.join(WEB, ".well-known", "assetlinks.json")
+                with open(fp, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            except FileNotFoundError:
+                pass
+
         if u.path == "/api/ping":
             return self._json(200, {"ok": True, "server": "matchdesk", "playwright": R.HAS_PLAYWRIGHT, "engine": ENGINE})
         if u.path.startswith("/api/fd/"):                      # Football-Data proxy (the user's own key, passed through)
