@@ -1,1 +1,9 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.onrender.matchdesk_cshq.twa",
+        "sha256_cert_fingerprints": ["64:BE:EE:FC:17:68:C1:F9:02:E9:0C:CB:E9:51:FA:DE:EE:07:EE:29:BD:C3:7F:BC:E6:D2:87:24:87:14:0B:E0"]
+      }
+    }]
 
