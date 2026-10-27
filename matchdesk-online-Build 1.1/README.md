@@ -90,3 +90,9 @@ Support address shown in the app: Matchdesksupport@gmail.com.
 - Visitor IP for rate-limiting uses Cloudflare's `CF-Connecting-IP` header when present, so it cannot be faked with `X-Forwarded-For`.
 - `/api/selftest` results are cached for 60 seconds. Point uptime pingers at `/api/ping`, not `/api/selftest`.
 - Legal text (Terms, Privacy, Refund Policy, Responsible Gambling) lives in `web/app.js`. Fill in `LEGAL_REG` and `LEGAL_ADDR` at the top of that section to show your registration number and address in the Terms.
+
+## Team form, league position and head-to-head (data sources)
+
+- **Primary: ESPN** (public endpoints, called from the user's browser, no key). Covers the leagues in `ESPN_COMPS` in `web/app.js` (including the South African Premiership, `rsa.1`). To cover another league, add its ESPN code to that list.
+- **Fallback: Football-Data.org** (optional key in About -> Settings). Used only for a match when ESPN cannot supply form for either team.
+- ESPN's endpoints are unofficial and could change; if form details stop appearing for everyone, check the ESPN calls in the browser's network tab first.
