@@ -93,6 +93,7 @@ Support address shown in the app: Matchdesksupport@gmail.com.
 
 ## Team form, league position and head-to-head (data sources)
 
-- **Primary: ESPN** (public endpoints, called from the user's browser, no key). Covers the leagues in `ESPN_COMPS` in `web/app.js` (including the South African Premiership, `rsa.1`). To cover another league, add its ESPN code to that list.
-- **Fallback: Football-Data.org** (optional key in About -> Settings). Used only for a match when ESPN cannot supply form for either team.
+- **ESPN** (public endpoints, called from the user's browser, no key) is the default for everyone. It covers the leagues in `ESPN_COMPS` in `web/app.js` (including the South African Premiership, `rsa.1`). To cover another league, add its ESPN code to that list.
+- **Football-Data.org** (optional key in About -> Settings). When a user has saved a key AND both teams are in a league Football-Data covers (see `FD_OF` in `web/app.js`), Football-Data is used first because it also counts cup and European matches. For every other match ESPN is used. If the preferred source has nothing, the other one is tried.
+- A rejected Football-Data key does not break anything: ESPN data is shown with a note.
 - ESPN's endpoints are unofficial and could change; if form details stop appearing for everyone, check the ESPN calls in the browser's network tab first.
