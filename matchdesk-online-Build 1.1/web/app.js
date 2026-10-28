@@ -1081,7 +1081,10 @@ function licStatus(){const today=localISO(),lic=store.get('license',null);let no
  if(lic&&lic.key){const[ok,info]=checkKey(lic.key,today);
   if(ok){const left=info.expires?Math.max(0,Math.ceil((Date.parse(info.expires+'T23:59:59')-Date.now())/864e5)):null;
    return{state:'licensed',expires:info.expires,days_left:left,headline:'MatchDesk Pro – active'+(info.expires?' until '+info.expires:''),detail:info.expires?`${left} day(s) left. Keys do not renew automatically.`:'No expiry. Thank you for supporting MatchDesk.'}}
-  note=info}
+  note=info;
+  // An expired licence means the Free plan straight away; the trial must not start again after someone has held a licence.
+  const ex=/expired on (\d{4}-\d{2}-\d{2})/.exec(typeof note==='string'?note:'');
+  if(ex)return{state:'free',ended:'license',expiredOn:ex[1],headline:'Licence expired on '+ex[1],detail:`Your Pro licence expired on ${ex[1]}, so MatchDesk is now on the Free plan (${FREE_ANALYSES_PER_DAY} bet-slip analysis per day). Enter a new license key to unlock Pro again.`}}
  let first=store.get('trial_first',null);if(!first){first=Date.now();store.set('trial_first',first)}
  const left=TRIAL_DAYS*864e5-(Date.now()-first);
  if(left>0){const d=Math.ceil(left/864e5);return{state:'trial',days_left:d,headline:`Pro free trial: ${d} day(s) left`,detail:'All Pro features are unlocked during the trial. Afterwards MatchDesk continues on the Free plan.'}}
