@@ -168,7 +168,8 @@ async function drawDash(){
   let html='';
   if(st.state==='trial'&&st.days_left!=null&&st.days_left<=2){html=`<b style="color:var(--y)">Trial ending soon</b><p class="muted" style="margin:6px 0">Your Pro trial has ${st.days_left} day(s) left. Tracked teams and history stay either way. Unlock unlimited analyses with Pro.</p><button type="button" data-go="about" data-plans="1">See plans</button>`;}
   else if(st.state==='trial'&&st.days_left!=null&&st.days_left<=6){html=`<b>Pro trial active</b><p class="muted" style="margin:6px 0">${st.days_left} day(s) of full access left. After that MatchDesk continues on the Free plan (1 analysis/day).</p><button type="button" class="ghost" data-go="about" data-plans="1">View plans</button>`;}
-  else if(st.state==='free'){html=`<b style="color:var(--o)">Free plan</b><p class="muted" style="margin:6px 0">${freeAnalysesLeft()} analysis slot(s) left today · up to ${FREE_SAVED_SLIPS} saved slips. Pro unlocks unlimited analyses.</p><button type="button" data-go="about" data-plans="1">Upgrade to Pro</button>`;}
+  else if(st.state==='free'){const lic=st.ended==='license',ttl=lic?`Your Pro licence expired${st.expiredOn?' on '+st.expiredOn:''}`:st.ended==='trial'?'Your free trial has ended':'Free plan';
+   html=`<b style="color:var(--o)">${ttl}</b><p class="muted" style="margin:6px 0">${st.ended?'You are now on the Free plan: ':''}${FREE_ANALYSES_PER_DAY} bet-slip analysis per day (${freeAnalysesLeft()} left today) and up to ${FREE_SAVED_SLIPS} saved slips. ${lic?'Renew Pro':'Upgrade to Pro'} for unlimited analyses.</p><button type="button" data-go="about" data-plans="1">${lic?'Renew Pro':'Upgrade to Pro'}</button>`;}
   else if(st.state==='licensed'&&st.days_left!=null&&st.days_left<=7){html=`<b style="color:var(--y)">Pro key expiring</b><p class="muted" style="margin:6px 0">${st.days_left} day(s) left on your key. Renew to keep unlimited analyses.</p><button type="button" data-go="about" data-plans="1">Renew / plans</button>`;}
   promo.hidden=!html;promo.innerHTML=html||'';
  }
@@ -197,7 +198,7 @@ function drawPlanBar(){
   const st=licStatus();let msg='';
   if(st.state==='trial')msg=`<span><b style="color:var(--y)">Pro trial:</b> ${st.days_left} day(s) left</span>`;
   else if(st.state==='licensed')msg=`<span><b>MatchDesk Pro</b>${st.expires?' · until '+st.expires:''}</span>`;
-  else msg=`<span style="color:var(--o)"><b>Free plan</b> · ${freeAnalysesLeft()} analysis left today</span>`;
+  else msg=`<span style="color:var(--o)"><b>${st.ended==='license'?'Licence expired':st.ended==='trial'?'Trial ended':'Free plan'}</b> · Free plan, ${freeAnalysesLeft()} analysis left today</span>`;
   bar.hidden=false;bar.innerHTML=msg+` <button type="button" class="ghost" id="planbar-go">${st.state==='free'?'Upgrade':'Plans'}</button>`;
   const go=$('#planbar-go');if(go)go.onclick=()=>{document.querySelector('nav [data-t=about]')?.click();setTimeout(()=>document.getElementById('plans-h')?.scrollIntoView(),60)};
  }catch{bar.hidden=true}
@@ -569,7 +570,7 @@ function renderLegs(){
 }
 $('#analyze').onclick=()=>{
  lastTarget=parseFloat($('#target').value)||5;lastText=$('#slip').value;
- if(lastText.trim()&&!canAnalyze(lastText)){$('#rempty').hidden=true;$('#legs').innerHTML=`<div class="card limit-card"><b>Daily free limit reached</b><p class="muted">The Free plan includes <b>${FREE_ANALYSES_PER_DAY} analysis per day</b>. Re-running the same slip still works. Pro unlocks unlimited analyses, advanced stake tools and unlimited history.</p><div class="row"><button data-go="about" data-plans="1" id="golimit">See plans &amp; unlock Pro</button></div><p class="muted" style="margin-top:8px;font-size:12px">Tracked teams, live scores and your history stay available on Free.</p></div>`;$('#combos').innerHTML='';$('#ctl').hidden=true;try{drawPlanBar()}catch{}return}
+ if(lastText.trim()&&!canAnalyze(lastText)){$('#rempty').hidden=true;$('#legs').innerHTML=`<div class="card limit-card"><b>Daily free limit reached</b>${(()=>{try{const e=licStatus().ended;return e==='license'?'<p class="muted" style="margin:4px 0"><b>Your Pro licence has expired.</b></p>':e==='trial'?'<p class="muted" style="margin:4px 0"><b>Your 7-day free trial has ended.</b></p>':''}catch{return''}})()}<p class="muted">The Free plan includes <b>${FREE_ANALYSES_PER_DAY} analysis per day</b>. Re-running the same slip still works. Pro unlocks unlimited analyses, advanced stake tools and unlimited history.</p><div class="row"><button data-go="about" data-plans="1" id="golimit">See plans &amp; unlock Pro</button></div><p class="muted" style="margin-top:8px;font-size:12px">Tracked teams, live scores and your history stay available on Free.</p></div>`;$('#combos').innerHTML='';$('#ctl').hidden=true;try{drawPlanBar()}catch{}return}
 if(lastText.trim())try{store.set('last_slip',lastText)}catch{}
 lastLegs=parse(lastText);lastLegs.forEach(l=>{l._criteria=l.is_bab?(l.sub_legs||[]).map(parseCrit):[parseCrit(`${l.market}: ${l.sel}`)]});
  $('#rempty').hidden=true;$('#clear2').hidden=false;renderLegs();lastCombos=combos(lastLegs,lastTarget);shown=PAGE;
@@ -1084,7 +1085,9 @@ function licStatus(){const today=localISO(),lic=store.get('license',null);let no
  let first=store.get('trial_first',null);if(!first){first=Date.now();store.set('trial_first',first)}
  const left=TRIAL_DAYS*864e5-(Date.now()-first);
  if(left>0){const d=Math.ceil(left/864e5);return{state:'trial',days_left:d,headline:`Pro free trial: ${d} day(s) left`,detail:'All Pro features are unlocked during the trial. Afterwards MatchDesk continues on the Free plan.'}}
- return{state:'free',headline:'Free plan',detail:note||`${FREE_ANALYSES_PER_DAY} analysis per day and ${FREE_SAVED_SLIPS} saved slips. Enter a license key to unlock Pro.`}}
+ const expM=/expired on (\d{4}-\d{2}-\d{2})/.exec(note||'');
+ if(expM)return{state:'free',ended:'license',expiredOn:expM[1],headline:'Licence expired on '+expM[1],detail:`Your Pro licence expired on ${expM[1]}, so MatchDesk is now on the Free plan (${FREE_ANALYSES_PER_DAY} bet-slip analysis per day). Enter a new license key to unlock Pro again.`};
+ return{state:'free',ended:'trial',headline:'Free trial ended',detail:(note?note+' ':'')+`Your ${TRIAL_DAYS}-day Pro trial has ended, so MatchDesk is now on the Free plan (${FREE_ANALYSES_PER_DAY} bet-slip analysis per day and ${FREE_SAVED_SLIPS} saved slips). Enter a license key to unlock Pro.`}}
 const isPro=()=>{try{const t=licStatus().state;return t==='licensed'||t==='trial'}catch{return true}};
 function drawLicense(){const st=licStatus();$('#lichead').textContent=({licensed:'✅ ',trial:'🎁 ',free:'🆓 '})[st.state]+st.headline;$('#licdetail').textContent=st.detail;$('#licremove').hidden=st.state!=='licensed';$('#lickey').closest('.row').hidden=st.state==='licensed'}
 $('#licact').onclick=()=>{const m=$('#licmsg'),k=$('#lickey').value;const[ok,info]=checkKey(k,localISO());
