@@ -534,24 +534,25 @@ function totalCheck(prod,text){
 let lastLegs=[],lastCombos=[],lastTarget=5,shown=PAGE,lastText='';
 const teamsOf=m=>{const p=String(m||'').split(/\s+(?:-|–|—|vs\.?|v\.?)\s+/i);return p.length>=2&&p[0].trim()&&p[1].trim()&&String(m).toLowerCase()!=='unknown'?[p[0].trim(),p.slice(1).join(' - ').trim()]:[null,null]};
 const alias=n=>ALIASES[(n||'').toLowerCase().trim()]||n;
-function dataConf(l){if(l.home_form&&l.away_form){const n=(l._criteria||[]).filter(c=>c.kind!=='other').length;return['Form available','--g',`Form loaded · ${(l._form_support||[]).length} backed · ${(l._form_flags||[]).length} disagreed`+(n?` · ${n} criteria classified`:'')]}
- if(l.home_form||l.away_form)return['Partial form','--y','Only one side matched in Football-Data'];
- if(l._form_lookup==='failed')return['Odds only','--y','Teams not on Football-Data free tier'];return['Odds only','--mu','No form key or no match data']}
+function dataConf(l){if(l.home_form&&l.away_form){const n=(l._criteria||[]).filter(c=>c.kind!=='other').length;return['Form available','--g',`Form loaded${l._src?' ('+l._src+')':''} · ${(l._form_support||[]).length} backed · ${(l._form_flags||[]).length} disagreed`+(n?` · ${n} criteria classified`:'')]}
+ if(l.home_form||l.away_form)return['Partial form','--y','Only one side matched in '+(l._src||'the data source')];
+ if(l._form_lookup==='failed')return['Odds only','--y','Teams not found in ESPN or Football-Data data'];return['Odds only','--mu','No recent match data found']}
 const formLine=(n,f)=>`${esc(n)}: form <b>${esc(f.form)}</b> (${f.played} matches) • scored ${f.avg_scored.toFixed(1)} • conceded ${f.avg_conceded.toFixed(1)} • BTTS ${f.btts_pct.toFixed(0)}% • O2.5 ${f.over25_pct.toFixed(0)}%`;
 function exHtml(l,i){if(l.is_bab&&!l.home_form)return '';const[h,a]=teamsOf(l.match);
  if(l._exStatus==='nokey')return i===lastLegs.findIndex(x=>x._exStatus==='nokey')?'<div class="ex muted">📊 Form, league position &amp; head-to-head: add your free Football-Data key in <b>About → Settings</b>.</div>':'';
- if(l._exStatus==='loading')return '<div class="ex muted">📊 Loading form &amp; head-to-head… <span>(the first lookup can take a minute on the free plan)</span></div>';
+ if(l._exStatus==='loading')return '<div class="ex muted">📊 Loading form &amp; head-to-head… <span>(the first lookup can take a few seconds)</span></div>';
  if(l._exStatus==='auth')return '<div class="ex"><span class="flag">Football-Data rejected your key – check it in About → Settings.</span></div>';
  if(!l._exStatus||l._exStatus==='skip'||!h)return '';
  if(l._exStatus==='unavail')return '<div class="ex muted">📊 Form &amp; head-to-head unavailable right now.</div>';
  const[ct,cc,cd]=dataConf(l);let o=`<div class="ex"><span class="tag" style="background:var(${cc})">${ct}</span> <span class="muted">${esc(cd)}</span>`;
  if(l.home_form||l.away_form){o+='<div class="h">📊 Recent form</div>';if(l.home_form)o+=`<div class="muted">${formLine(h,l.home_form)}</div>`;if(l.away_form)o+=`<div class="muted">${formLine(a,l.away_form)}</div>`}
- else if(l._form_lookup==='failed')o+='<div class="flag">Form unavailable (team not covered by Football-Data – its free tier only covers major European leagues)</div>';
+ else if(l._form_lookup==='failed')o+='<div class="flag">Form unavailable (no recent match data could be found for these teams in the ESPN league data.'+(store.get('fdkey','')?'':' You can add a free Football-Data key in About → Settings for extra coverage.')+')</div>';
  const st=l.standings||{};if(st.home_pos!=null||st.away_pos!=null)o+=`<div class="h">📋 League position</div><div class="muted">${[st.home_pos!=null?esc(h)+' '+st.home_pos:'',st.away_pos!=null?esc(a)+' '+st.away_pos:''].filter(Boolean).join(' · ')}</div>`;
  const ms=(l.h2h||{}).matches||[];if(ms.length){const s=h2hSummary(ms,l.h2h.home_id);
   o+=`<div class="h">⚔️ Head-to-head (recent)</div><div class="muted">${esc(h)} vs ${esc(a)}: last ${ms.length} → <b>${s.w}W-${s.d}D-${s.l}L</b> (${esc(h)}'s view)</div>
   <details><summary class="muted">Show matches</summary>${ms.map(m=>`<div class="muted">${esc((m.utcDate||'').slice(0,10))} · ${esc(m.homeTeam?.shortName||m.homeTeam?.name||'')} ${m.score?.fullTime?.home??'?'}–${m.score?.fullTime?.away??'?'} ${esc(m.awayTeam?.shortName||m.awayTeam?.name||'')}</div>`).join('')}</details>`}
  const S=l._form_support||[],F=l._form_flags||[];if(S.length||F.length)o+='<div class="h">Does recent form back this pick?</div>'+S.map(x=>`<div class="ok">✔ ${esc(x)}</div>`).join('')+F.map(x=>`<div class="flag">⚠ ${esc(x)}</div>`).join('');
+ if(l._fdnote)o+=`<div class="muted">⚠ ${esc(l._fdnote)}</div>`;
  return o+'</div>'}
 function renderLegs(){
  const el=$('#legs');if(!lastLegs.length){el.innerHTML=lastText?'<p class="flag">No legs detected. Each leg needs a decimal price on its own line (e.g. 1.85).</p>':'';return}
@@ -786,7 +787,7 @@ async function checkHelper(){const h=$('#hst'),f=await findBase();
   :`<span class="flag">● No code-loading server found – Load code will open the bookmaker page instead (copy the slip there, then Paste).</span> <span class="muted">This page is at: ${esc(location.protocol==='file:'?'a file on your computer (opened by double-click)':location.origin)}. The server address is http://localhost:8080</span>`}
 checkHelper();$('#hst').onclick=checkHelper;setInterval(()=>{if(!document.hidden)checkHelper()},15000);$('#bpaste').onclick=pasteClipboard;
 
-// ---------- head-to-head (Football-Data.org), ported from the desktop app ----------
+// ---------- head-to-head (Football-Data.org fallback), ported from the desktop app ----------
 const FD_COMPS=['PL','PD','BL1','SA','FL1','CL','ELC','PPL','DED','BSA'];
 const TR_={ø:'o',æ:'ae',œ:'oe',ß:'ss',đ:'d',ł:'l',ð:'d',þ:'th'},PRE=new Set(['if','ifk','fc','sc','bk','ac','as','ss','rc','cd','afc','cf','fk']);
 function normName(s){s=(s||'').toLowerCase().trim().replace(/[øæœßđłðþ]/g,c=>TR_[c]).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9\s]/g,'').replace(/\s+/g,' ').trim();
@@ -811,8 +812,8 @@ async function fd(path,params={}){const key=store.get('fdkey','');if(!key)return
 async function compTeams(code){const c=cacheGet('teams_'+code,48*36e5);if(c)return c;const r=await fd('competitions/'+code+'/teams');
  if(!r)return[];if(r.status===401||r.status===403)throw new Error('auth');if(!r.ok)return[];
  const t=((await r.json()).teams||[]).map(x=>({id:x.id,name:x.name,shortName:x.shortName,tla:x.tla}));cacheSet('teams_'+code,t);return t}
-async function findTeam(name,prefer){const map=store.get('fdmap',{}),k=name.toLowerCase().trim();if(map[k])return map[k];
- let best={s:0};for(const c of [prefer,...FD_COMPS].filter((x,i,a)=>x&&a.indexOf(x)===i)){
+async function findTeam(name,prefer,only){const map=store.get('fdmap',{}),k=name.toLowerCase().trim();if(map[k])return map[k];
+ let best={s:0};for(const c of (only?[prefer]:[prefer,...FD_COMPS]).filter((x,i,a)=>x&&a.indexOf(x)===i)){
   for(const t of await compTeams(c)){const sc=nameScore(name,t);if(sc>best.s)best={s:sc,id:t.id,comp:c,name:t.name}}
   if(best.s>=100||(best.s>=80&&c===prefer))break}
  if(best.id&&best.s>=60){map[k]={id:best.id,comp:best.comp,name:best.name};store.set('fdmap',map);return map[k]}return null}
@@ -842,24 +843,102 @@ async function getTable(comp){const c=cacheGet('table_'+comp,24*36e5);if(c)retur
  const s=(await r.json()).standings||[],tot=s.filter(g=>(g.type||'TOTAL')==='TOTAL'),rows=(tot.length?tot:s).flatMap(g=>g.table||[]).map(x=>({id:x.team?.id,pos:x.position}));
  if(!rows.length)return null;cacheSet('table_'+comp,rows);return rows}
 let enrichRun=0;
-async function enrichLegs(legs){const run=++enrichRun,key=store.get('fdkey','');
- legs.forEach(l=>{l._exStatus=key?undefined:'nokey';l._criteria=l.is_bab?(l.sub_legs||[]).map(parseCrit):[parseCrit(`${l.market}: ${l.sel}`)];if(!key){delete l._form_support;delete l._form_flags;delete l._form_adj}});
- lastCombos=combos(lastLegs,lastTarget);drawCombos();renderLegs();if(!key)return;
- let prefer=null;
+// ---------- ESPN form, league position & head-to-head (primary source, no key needed) ----------
+// Football-Data (below) stays as an optional fallback for teams ESPN cannot supply.
+const ESPN_COMPS=['eng.1','esp.1','ita.1','ger.1','fra.1','rsa.1','ned.1','por.1','sco.1','tur.1','bel.1','usa.1','mex.1','bra.1','arg.1','eng.2','nga.1','gha.1','ksa.1','jpn.1','aus.1','den.1','swe.1','nor.1','gre.1','aut.1'];
+const espnSched=new Map(),espnMiss=new Map();
+async function espnTeamList(lg){const c=cacheGet('etm_'+lg,48*36e5);if(c)return c;if(cacheGet('etmfail_'+lg,36e5))return[];
+ try{const d=await espn('soccer',lg,'teams'),out=[];
+  for(const sp of d.sports||[])for(const L of sp.leagues||[])for(const e of L.teams||[]){const t=e.team||{};if(t.id!=null)out.push({id:String(t.id),name:t.displayName||t.name||'',shortName:t.shortDisplayName||t.name||'',tla:t.abbreviation||''})}
+  if(out.length)cacheSet('etm_'+lg,out);else cacheSet('etmfail_'+lg,1);return out}catch{cacheSet('etmfail_'+lg,1);return[]}}
+async function espnFindTeam(name,prefer){const map=store.get('efmap',{}),k=String(name||'').toLowerCase().trim();if(!k)return null;if(map[k])return map[k];if(Date.now()-(espnMiss.get(k)||0)<6e5)return null;
+ const comps=[prefer,...ESPN_COMPS].filter((x,i,a)=>x&&a.indexOf(x)===i);let best={s:0};
+ for(let i=0;i<comps.length;i+=4){const batch=comps.slice(i,i+4),lists=await Promise.all(batch.map(espnTeamList));
+  lists.forEach((tl,j)=>{for(const t of tl){const sc=nameScore(name,t);if(sc>best.s)best={s:sc,id:t.id,comp:batch[j],name:t.name}}});
+  if(best.s>=100||(best.s>=80&&batch.includes(prefer)))break}
+ if(best.id&&best.s>=80){map[k]={id:best.id,comp:best.comp,name:best.name};store.set('efmap',map);return map[k]}espnMiss.set(k,Date.now());return null}
+const espnScore=x=>{const s=x&&x.score,v=(s&&typeof s==='object')?(s.value??s.displayValue):s,n=parseFloat(v);return Number.isFinite(n)?n:null};
+function espnMatches(j){const out=[];
+ for(const ev of(j&&j.events)||[]){const c=(ev.competitions||[])[0];if(!c)continue;
+  const st=(c.status&&c.status.type)||(ev.status&&ev.status.type)||{};if(!(st.completed===true||st.state==='post'))continue;
+  const cp=c.competitors||[],H=cp.find(x=>x.homeAway==='home'),A=cp.find(x=>x.homeAway==='away');if(!H||!A)continue;
+  const hg=espnScore(H),ag=espnScore(A);if(hg==null||ag==null)continue;
+  const tm=x=>({id:String((x.team&&x.team.id)??x.id),name:(x.team&&(x.team.displayName||x.team.name))||'',shortName:(x.team&&x.team.shortDisplayName)||''});
+  out.push({utcDate:ev.date||c.date||'',homeTeam:tm(H),awayTeam:tm(A),score:{fullTime:{home:hg,away:ag}}})}
+ return out.sort((x,y)=>String(x.utcDate).localeCompare(String(y.utcDate)))}
+const espnYear=j=>{const y=j&&((j.requestedSeason&&j.requestedSeason.year)??(j.season&&j.season.year));if(y)return+y;const n=new Date();return n.getMonth()>=6?n.getFullYear():n.getFullYear()-1};
+async function espnSeason(id,lg,season){const k=lg+'|'+id+'|'+(season||'cur'),c=espnSched.get(k);if(c&&Date.now()-c.t<36e5)return c.v;
+ try{const j=await espn('soccer',lg,`teams/${id}/schedule`+(season?`?season=${season}`:'')),v={year:espnYear(j),ms:espnMatches(j)};espnSched.set(k,{t:Date.now(),v});return v}catch{return null}}
+async function espnRecent(id,lg){const cur=await espnSeason(id,lg);if(!cur)return null;let ms=cur.ms.slice();
+ if(ms.length<8){const prev=await espnSeason(id,lg,cur.year-1);if(prev)ms=prev.ms.concat(ms)}
+ const cut=Date.now()-150*864e5;return ms.filter(m=>Date.parse(m.utcDate)>=cut).slice(-10)}
+function formStats(ms,tid){let w=0,d=0,l=0,gf=0,ga=0,btts=0,o15=0,o25=0,o35=0,cs=0,fts=0;const form=[];
+ for(const m of ms){const hg=m.score.fullTime.home,ag=m.score.fullTime.away,isHome=m.homeTeam.id===tid,tg=isHome?hg:ag,og=isHome?ag:hg;gf+=tg;ga+=og;
+  if(tg>og){w++;form.push('W')}else if(tg===og){d++;form.push('D')}else{l++;form.push('L')}
+  if(hg>0&&ag>0)btts++;const t=hg+ag;if(t>1.5)o15++;if(t>2.5)o25++;if(t>3.5)o35++;if(og===0)cs++;if(tg===0)fts++}
+ const p=w+d+l;if(!p)return null;
+ return{form:form.slice(-5).reverse().join(' '),played:p,wins:w,draws:d,losses:l,avg_scored:gf/p,avg_conceded:ga/p,avg_total:(gf+ga)/p,btts_pct:btts/p*100,over15_pct:o15/p*100,over25_pct:o25/p*100,over35_pct:o35/p*100,win_pct:w/p*100,draw_pct:d/p*100,loss_pct:l/p*100,clean_sheet_pct:cs/p*100,failed_to_score_pct:fts/p*100}}
+async function espnForm(id,lg){const c=cacheGet('eform_'+id,6*36e5);if(c)return c;const ms=await espnRecent(id,lg);if(!ms||ms.length<3)return null;
+ const o=formStats(ms,String(id));if(o)cacheSet('eform_'+id,o);return o}
+async function espnTable(lg){const c=cacheGet('etable_'+lg,24*36e5);if(c)return c;
+ try{const r=await fetchT(`https://site.api.espn.com/apis/v2/sports/soccer/${lg}/standings`);if(!r.ok)return null;const j=await r.json(),rows=[];
+  const groups=(j.children&&j.children.length)?j.children.map(x=>x.standings):[j.standings];
+  for(const g of groups)((g&&g.entries)||[]).forEach((e,i)=>{const rk=(e.stats||[]).find(x=>x.name==='rank'||x.type==='rank');rows.push({id:String(e.team&&e.team.id),pos:rk&&Number.isFinite(+rk.value)?+rk.value:i+1})});
+  if(!rows.length)return null;cacheSet('etable_'+lg,rows);return rows}catch{return null}}
+async function espnH2H(hm,am){const key=`eh2h_${hm.id}_${am.id}`,c=cacheGet(key,12*36e5);if(c)return c;
+ const cur=await espnSeason(hm.id,hm.comp);if(!cur)return null;let all=cur.ms.slice();
+ for(const y of[cur.year-1,cur.year-2]){const sn=await espnSeason(hm.id,hm.comp,y);if(sn)all=sn.ms.concat(all)}
+ const ms=all.filter(m=>(m.homeTeam.id===hm.id&&m.awayTeam.id===am.id)||(m.homeTeam.id===am.id&&m.awayTeam.id===hm.id)).sort((x,y)=>String(y.utcDate).localeCompare(String(x.utcDate))).slice(0,5);
+ cacheSet(key,ms);return ms}
+function applyForm(l,hf,af,h,a,src){l.home_form=hf||undefined;l.away_form=af||undefined;l._src=src;
+ const S=[],F=[];let adj=0,n=0;for(const c of l._criteria){const[ok,note,ad]=evalCrit(c,hf,af,h,a);if(ok===true&&note){S.push(note);adj+=ad;n++}else if(ok===false&&note){F.push(note);adj+=ad;n++}}
+ l._form_support=S;l._form_flags=F;l._form_adj=n?Math.max(-.1,Math.min(.1,adj/Math.max(1,n)*1.2)):0}
+let ePrefer=null,fPrefer=null,fdBad=false;
+// ESPN league code -> Football-Data competition code (leagues the Football-Data free tier covers)
+const FD_OF={'eng.1':'PL','eng.2':'ELC','esp.1':'PD','ger.1':'BL1','ita.1':'SA','fra.1':'FL1','ned.1':'DED','por.1':'PPL','bra.1':'BSA'};
+async function espnResolve(h,a,run){
+ const hm=await espnFindTeam(h,ePrefer)||(alias(h)!==h?await espnFindTeam(alias(h),ePrefer):null);if(run!==enrichRun)return null;if(hm)ePrefer=hm.comp;
+ const am=await espnFindTeam(a,ePrefer)||(alias(a)!==a?await espnFindTeam(alias(a),ePrefer):null);if(run!==enrichRun)return null;
+ return{hm,am}}
+async function espnData(l,h,a,R,run){const{hm,am}=R;if(!hm&&!am)return false;
+ const[hf,af]=await Promise.all([hm?espnForm(hm.id,hm.comp):null,am?espnForm(am.id,am.comp):null]);if(run!==enrichRun)return false;
+ if(!hf&&!af)return false;
+ const tbl={};for(const t of[hm,am])if(t&&!(t.comp in tbl))tbl[t.comp]=await espnTable(t.comp);if(run!==enrichRun)return false;
+ const pos=t=>t&&tbl[t.comp]?(tbl[t.comp].find(r=>r.id===t.id)||{}).pos:null,hp=pos(hm),ap=pos(am);
+ if(hp!=null||ap!=null)l.standings={home_pos:hp??null,away_pos:ap??null};
+ if(hm&&am&&hm.id!==am.id){const ms=await espnH2H(hm,am);if(run!==enrichRun)return false;if(ms&&ms.length)l.h2h={matches:ms,home_id:hm.id}}
+ l._form_lookup='ok';applyForm(l,hf,af,h,a,'ESPN');l._exStatus='done';return true}
+// Football-Data step. pc = {h,a} competition codes for a fast, single-league lookup (used when ESPN already told us the leagues).
+async function fdEnrich(l,h,a,run,pc){
+ const hm=await findTeam(alias(h),pc?pc.h:fPrefer,!!pc)||await findTeam(h,pc?pc.h:fPrefer,!!pc);if(run!==enrichRun)return false;if(hm)fPrefer=hm.comp;
+ const am=await findTeam(alias(a),pc?pc.a:fPrefer,!!pc)||await findTeam(a,pc?pc.a:fPrefer,!!pc);if(run!==enrichRun)return false;
+ l._form_lookup='none';const hf=hm?await getForm(hm.id):null,af=am?await getForm(am.id):null;if(run!==enrichRun)return false;
+ if(hm||am)l._form_lookup=(hf||af)?'ok':'failed';
+ const comp=hm?.comp||am?.comp,tb=comp?await getTable(comp):null;if(run!==enrichRun)return false;
+ if(tb)l.standings={home_pos:hm?(tb.find(r=>r.id===hm.id)||{}).pos:null,away_pos:am?(tb.find(r=>r.id===am.id)||{}).pos:null};
+ if(hm&&am&&hm.id!==am.id){const ms=await getH2H(hm.id,am.id);if(ms&&ms.length)l.h2h={matches:ms,home_id:hm.id}}
+ applyForm(l,hf,af,h,a,'Football-Data');l._exStatus='done';return!!(hf||af)}
+async function enrichLegs(legs){const run=++enrichRun,key=store.get('fdkey','');ePrefer=null;fPrefer=null;fdBad=false;
+ legs.forEach(l=>{l._exStatus=undefined;l._fdnote=undefined;l._criteria=l.is_bab?(l.sub_legs||[]).map(parseCrit):[parseCrit(`${l.market}: ${l.sel}`)];delete l._form_support;delete l._form_flags;delete l._form_adj});
+ lastCombos=combos(lastLegs,lastTarget);drawCombos();renderLegs();
  for(const l of legs){if(run!==enrichRun)return;const[h,a]=teamsOf(l.match);if(!h||!a||l.is_bab&&!h){l._exStatus='skip';continue}
   l._exStatus='loading';renderLegs();
-  try{
-   const hm=await findTeam(alias(h),prefer)||await findTeam(h,prefer);if(run!==enrichRun)return;if(hm)prefer=hm.comp;
-   const am=await findTeam(alias(a),prefer)||await findTeam(a,prefer);if(run!==enrichRun)return;
-   l._form_lookup='none';const hf=hm?await getForm(hm.id):null,af=am?await getForm(am.id):null;if(run!==enrichRun)return;
-   if(hm||am)l._form_lookup=(hf||af)?'ok':'failed';
-   const comp=hm?.comp||am?.comp,tb=comp?await getTable(comp):null;if(run!==enrichRun)return;
-   if(tb)l.standings={home_pos:hm?(tb.find(r=>r.id===hm.id)||{}).pos:null,away_pos:am?(tb.find(r=>r.id===am.id)||{}).pos:null};
-   if(hm&&am&&hm.id!==am.id){const ms=await getH2H(hm.id,am.id);if(ms&&ms.length)l.h2h={matches:ms,home_id:hm.id}}
-   l.home_form=hf||undefined;l.away_form=af||undefined;
-   const S=[],F=[];let adj=0,n=0;for(const c of l._criteria){const[ok,note,ad]=evalCrit(c,hf,af,h,a);if(ok===true&&note){S.push(note);adj+=ad;n++}else if(ok===false&&note){F.push(note);adj+=ad;n++}}
-   l._form_support=S;l._form_flags=F;l._form_adj=n?Math.max(-.1,Math.min(.1,adj/Math.max(1,n)*1.2)):0;l._exStatus='done'
-  }catch(err){l._exStatus=err.message==='auth'?'auth':'unavail'}
+  let done=false,fdRan=false,R=null;
+  try{R=await espnResolve(h,a,run)}catch{R=null}
+  if(run!==enrichRun)return;
+  const fh=R&&R.hm&&FD_OF[R.hm.comp],fa=R&&R.am&&FD_OF[R.am.comp];
+  // 1) key holder + both teams in a league Football-Data covers -> Football-Data first (it counts cup and European games too)
+  if(key&&!fdBad&&fh&&fa){fdRan=true;
+   try{done=await fdEnrich(l,h,a,run,{h:fh,a:fa})}
+   catch(err){done=false;if(err.message==='auth'){fdBad=true;l._fdnote='Football-Data rejected your key, so ESPN data is shown instead. Check the key in About → Settings.'}}
+   if(run!==enrichRun)return;if(!done){delete l.standings;delete l.h2h}}
+  // 2) ESPN (everyone; also the backup when Football-Data had nothing)
+  if(!done&&R&&(R.hm||R.am)){try{done=await espnData(l,h,a,R,run)}catch{done=false}if(run!==enrichRun)return}
+  // 3) Football-Data as a backup for teams ESPN could not supply
+  if(!done&&key&&!fdRan&&!fdBad){fdRan=true;
+   try{done=await fdEnrich(l,h,a,run,null)}catch(err){l._exStatus=err.message==='auth'?'auth':'unavail';if(err.message==='auth')fdBad=true}
+   if(run!==enrichRun)return}
+  if(!done&&l._exStatus!=='auth'&&l._exStatus!=='unavail'){if(!fdRan)l._form_lookup='failed';l._exStatus='done'}
   if(run!==enrichRun)return;lastCombos=combos(lastLegs,lastTarget);drawCombos();renderLegs()}
  renderLegs()}
 // settings: key + alerts
@@ -1089,7 +1168,7 @@ const TERMS_HTML = `
 <h4>8. Third-party services and bookmakers</h4>
 <ul>
 <li><b>Bookmakers.</b> Bookmaker names and logos belong to their owners and are used only to identify the service you choose. The booking-code loader fetches the public share page for a code <b>you</b> enter, so you can analyse that slip. Bookmakers can change or restrict their websites at any time, so the loader may work only sometimes, or stop working, and we do not promise that any particular bookmaker will be supported. You can always paste your slip instead. You remain responsible for following each bookmaker's own terms.</li>
-<li><b>Data and APIs.</b> Live scores use public ESPN data. Optional form data uses football-data.org, and optional AI commentary uses Groq or Google Gemini with <b>your own</b> API key and account. Those services have their own terms, limits and costs, and may change or end. We are not responsible for their availability, accuracy or charges.</li>
+<li><b>Data and APIs.</b> Live scores, team form, league tables and head-to-head use public ESPN data. Optional extra coverage uses football-data.org with your own key, and optional AI commentary uses Groq or Google Gemini with <b>your own</b> API key and account. Those services have their own terms, limits and costs, and may change or end. We are not responsible for their availability, accuracy or charges.</li>
 <li><b>PayPal</b> processes payments; <b>our hosting and infrastructure providers</b> run the service.</li>
 </ul>
 <h4>9. Estimates only: no advice, no guarantees</h4>
@@ -1181,7 +1260,7 @@ const PRIVACY_HTML = `
 <li><b>On your device only:</b> tracked teams, saved slips and history, settings, your optional API keys (Football-Data, Groq, Gemini), and your licence key and its status. This stays in your browser storage on your device and is not sent to us. Clearing your browser or app data removes it, including your licence key, so keep a copy of your key.</li>
 <li><b>When you buy:</b> PayPal processes your payment and gives us your name, PayPal email address, country, the amount and the transaction ID. We use these to send your key, give support, handle refunds and meet tax and accounting duties. We never receive your card details.</li>
 <li><b>Booking-code loading:</b> when you load a code, the code (or link) and chosen bookmaker are sent to our server, which fetches the public share page for you, using a remote browser service where configured. The result is kept in the server's short-term memory for a few minutes and is not stored permanently.</li>
-<li><b>Form data (optional):</b> if you add a Football-Data key, your requests pass through our server to football-data.org. Your key is not written to disk by us.</li>
+<li><b>Form and league data:</b> team form, league tables and head-to-head are requested <b>directly from your device</b> to ESPN's public data service. If you also add an optional Football-Data key, those requests pass through our server to football-data.org, and your key is not written to disk by us.</li>
 <li><b>Push notifications (optional):</b> if you switch them on, we store your browser's push subscription (an address used to reach your device) and the teams you track, so we can send goal, kick-off and full-time alerts. Turn them off in About to remove the subscription.</li>
 <li><b>AI commentary (optional):</b> if you add a Groq or Gemini key, the slip details you ask about (teams, selections, odds) are sent <b>straight from your device</b> to that provider under your own account. We do not see them.</li>
 <li><b>Support:</b> your emails to us and our replies.</li>
@@ -1260,7 +1339,7 @@ const TOUR_STEPS=[
  {tab:'dash',sel:'.tiles',title:'Quick Launch',body:'Jump straight to the Bet Analyzer, Live Scores, Plans, or Video Guide from these tiles.'},
  {tab:'dash',sel:'#glance',title:'At a glance',body:'See how many teams you track, live matches, saved slips, your plan status, and whether form data or code loading is ready.'},
  {tab:'analyzer',sel:'#analyzer .left',title:'Bet Analyzer – input',body:'Paste a booking code / Bet ID, load a share link, paste slip text, or import a screenshot. Set a target odds and tap Analyze.'},
- {tab:'analyzer',sel:'#analyzer .right',title:'Risk ratings & recommendations',body:'After analysis you get per-leg risk, fair probability estimates, form notes (with a Football-Data key), and recommended combinations near your target odds.'},
+ {tab:'analyzer',sel:'#analyzer .right',title:'Risk ratings & recommendations',body:'After analysis you get per-leg risk, fair probability estimates, form notes from recent results, and recommended combinations near your target odds.'},
  {tab:'scores',sel:'#scores .row',title:'Live Scores – choose sport & league',body:'Pick a sport and league, search teams, or track a whole league. Scores auto-refresh while this tab is open.'},
  {tab:'scores',sel:'#scores details.card',title:'Track from code or manually',body:'Add any ESPN sport/league/team manually, or load teams straight from a booking code. Use “Teams from my slip” after analyzing a slip.'},
  {tab:'scores',sel:'#chips',title:'Your tracked list',body:'Everything you track appears here. Tap a chip to stop tracking it, or use Clear to empty the list.'},
