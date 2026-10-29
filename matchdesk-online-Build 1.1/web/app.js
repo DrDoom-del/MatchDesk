@@ -1,5 +1,5 @@
 'use strict';
-const BUILD='v27';
+const BUILD='v28';
 let _tt;function toast(m){let e=document.getElementById('toast');if(!e){e=document.createElement('div');e.id='toast';e.setAttribute('role','status');document.body.appendChild(e)}e.textContent=m;e.className='show';clearTimeout(_tt);_tt=setTimeout(()=>e.className='',2600)}
 (function selfHeal(){try{if(localStorage.getItem('md_build')===BUILD)return;localStorage.setItem('md_build',BUILD);
  if(!('serviceWorker' in navigator)||!navigator.serviceWorker.controller)return;   // nothing stale is in control
@@ -33,6 +33,28 @@ const MAJOR=['eng.1','esp.1','ita.1','ger.1','fra.1','ned.1','por.1','rsa.1','ue
 const NATIONS=['India','Australia','England','South Africa','Pakistan','New Zealand','Sri Lanka','West Indies','Bangladesh','Afghanistan','Zimbabwe','Ireland'];
 const fetchT=async(url,ms=10000)=>{const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{return await fetch(url,{signal:c.signal})}finally{clearTimeout(t)}};
 const MAX_TRACK=20,sleep=ms=>new Promise(r=>setTimeout(r,ms)),WILD=['','current','upcoming','latest','season'];
+// Normalize team names for reliable matching (accents, FC/CF/SC, punctuation)
+function normTeam(n){
+  if(!n)return '';
+  let s=String(n).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/&/g,' and ').replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
+  // strip common club prefixes/suffixes that vary across sources
+  s=s.replace(/\b(fc|cf|sc|afc|cfc|ac|as|ss|us|rc|cd|ud|sd|ca|bc|bk)\b/g,' ').replace(/\s+/g,' ').trim();
+  return s;
+}
+function teamMatch(trackedName, displayName){
+  if(!trackedName||!displayName)return false;
+  const et=normTeam(alias?alias(trackedName):trackedName), hn=normTeam(displayName);
+  if(!et||!hn)return false;
+  if(hn===et||hn.includes(et)||et.includes(hn))return true;
+  // token overlap: require the significant tokens of the shorter name to appear in the longer
+  const tok=s=>s.split(' ').filter(w=>w.length>2&&!['and','the','united','city','town','hotspur','wanderers','athletic','sporting','real'].includes(w));
+  const a=tok(et), b=tok(hn);
+  if(!a.length||!b.length)return et.length>=4&&(hn.includes(et)||et.includes(hn));
+  const [sh,lo]=a.length<=b.length?[a,b]:[b,a];
+  return sh.every(t=>lo.some(x=>x===t||x.startsWith(t)||t.startsWith(x)));
+}
+
 $('#sport').innerHTML=Object.entries(SPORTS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
 $('#sport').value=SPORTS[store.get('sport','soccer')]?store.get('sport','soccer'):'soccer';
 function fillLeagues(){const g={};SPORTS[$('#sport').value].leagues.forEach(l=>(g[l[2]]=g[l[2]]||[]).push(l));
@@ -40,7 +62,7 @@ function fillLeagues(){const g={};SPORTS[$('#sport').value].leagues.forEach(l=>(
 fillLeagues();{const sv=store.get('league','eng.1');if([...$('#league').options].some(o=>o.value===sv))$('#league').value=sv}
 const leagueName=()=>$('#league').selectedOptions[0]?.textContent||'';
 const tracked=()=>store.get('tracked',[]),setTracked=t=>{store.set('tracked',t);drawChips();drawTeams();if(typeof syncPushSoon==='function')syncPushSoon()};
-const espn=async(sport,lg,kind)=>{const r=await fetchT(`https://site.api.espn.com/apis/site/v2/sports/${spt(sport).path}/${lg}/${kind}`);if(!r.ok)throw new Error(r.status);return r.json()};
+const espn=async(sport,lg,kind,q='')=>{const r=await fetchT(`https://site.api.espn.com/apis/site/v2/sports/${spt(sport).path}/${lg}/${kind}${q?('?'+q):''}`);if(!r.ok)throw new Error(r.status);return r.json()};
 let teams=[];
 async function loadTeams(){const sport=$('#sport').value,lg=$('#league').value,sp=SPORTS[sport];teams=[];
  if(sp.special==='cricket'){teams=[...NATIONS];return drawTeams()}if(sp.special==='f1'){teams=[];$('#teams').innerHTML='<span class="muted">Formula 1 follows the whole race weekend – tap “Track whole league” to follow it.</span>';return}
@@ -53,15 +75,39 @@ function drawTeams(){if(SPORTS[$('#sport').value].special==='f1')return;const q=
  $('#teams').innerHTML=(list.length?list.map(n=>`<button class="chip ${on(n)?'on':''}" data-t="${esc(n)}">${on(n)?'✓ ':''}${esc(n)}</button>`).join(''):'<span class="muted">No teams found for that league/search.</span>')
   +(q&&!teams.some(n=>n.toLowerCase()===q)?`<button class="chip add" data-t="${esc($('#tsearch').value.trim())}">＋ Add “${esc($('#tsearch').value.trim())}”</button>`:'')}
 $('#teams').onclick=e=>{const n=e.target.dataset?.t;if(n)toggleTeam(n)};
-function addEntries(list){const t=tracked();let add=0;for(const e of list){if(t.length>=MAX_TRACK)break;if(!t.some(x=>x.sport===e.sport&&x.team.toLowerCase()===e.team.toLowerCase()&&(x.league||'')===(e.league||''))){t.push(e);add++}}setTracked(t);return add}
+function addEntries(list){const t=tracked();let add=0;for(const e of list){if(t.length>=MAX_TRACK)break;
+  const tn=(e.team||'').toLowerCase().trim();if(!tn)continue;
+  const exists=t.some(x=>x.sport===e.sport&&(x.team||'').toLowerCase().trim()===tn);
+  if(exists){
+    // Prefer keeping a specific league if the new one is empty, or upgrade empty to specific
+    const idx=t.findIndex(x=>x.sport===e.sport&&(x.team||'').toLowerCase().trim()===tn);
+    if(idx>=0&&!(t[idx].league||'')&&(e.league||'')){t[idx].league=e.league}
+    continue}
+  t.push({team:e.team.trim(),sport:e.sport||'soccer',league:e.league||''});add++}
+ setTracked(t);return add}
 function toggleTeam(n){let t=tracked();const sport=$('#sport').value,lg=$('#league').value,i=t.findIndex(e=>e.sport===sport&&e.team.toLowerCase()===n.toLowerCase());
  if(i>=0){t.splice(i,1);setTracked(t)}else{if(t.length>=MAX_TRACK){$('#status').textContent=`You can track up to ${MAX_TRACK} items.`;return}addEntries([{team:n,sport,league:lg}])}loadScores()}
 $('#twhole').onclick=()=>{addEntries([{team:'🌐 '+leagueName(),sport:$('#sport').value,league:$('#league').value}]);loadScores()};
 $('#madd').onclick=()=>{const sport=$('#msport').value.trim().toLowerCase(),lg=$('#mleague').value.trim(),team=$('#mteam').value.trim(),st=$('#mst');
  if(!sport||!lg){st.textContent='Enter a sport and a league code (for example soccer + eng.1).';return}
  const n=addEntries([{team:team||'🌐 '+sport+'/'+lg,sport,league:lg}]);st.textContent=n?`Tracking ${team||'the whole '+lg+' league'} (${sport}/${lg}). If nothing shows up, check the league code.`:'Already tracking that (or the limit of '+MAX_TRACK+' is reached).';$('#mteam').value='';loadScores()};
-function addSlipTeams(legs){const names=[...new Set((legs||[]).flatMap(l=>teamsOf(l.match)).filter(Boolean))];if(!names.length)return null;
- return[addEntries(names.map(n=>({team:n,sport:'soccer',league:''}))),names.length]}
+function addSlipTeams(legs){
+  const raw=(legs||[]).flatMap(l=>teamsOf(l.match)).filter(Boolean);
+  // Prefer longer / more complete names, apply alias, dedupe by normalized key
+  const byKey=new Map();
+  for(const n of raw){
+    const cleaned=(n||'').replace(/\s+/g,' ').trim();
+    if(!cleaned||cleaned.length<2)continue;
+    const can=alias(cleaned);
+    const key=normTeam(can);
+    if(!key)continue;
+    const prev=byKey.get(key);
+    // keep the nicer display name (prefer the aliased or longer original)
+    if(!prev||can.length>prev.team.length||(can===cleaned&&prev.team!==cleaned))byKey.set(key,{team:can,sport:'soccer',league:''});
+  }
+  const entries=[...byKey.values()];
+  if(!entries.length)return null;
+  return[addEntries(entries),entries.length]}
 $('#fromslip').onclick=()=>{const r=addSlipTeams(lastLegs);$('#status').textContent=r?`Added ${r[0]} of ${r[1]} team(s) from your slip. They are looked up in the major leagues and cups; for a team in another league, open that league and tap the team.`:'No teams found – analyze a slip first.';loadScores()};
 $('#scodebtn').onclick=async()=>{const raw=$('#scode').value.trim(),st=$('#scst');if(!raw){st.textContent='Type or paste a booking code, Bet ID or link first.';return}
  let text=raw;if(!looksLikeSlip(raw)){st.textContent='Loading the slip from the bookmaker…';const hr=await helperResolve(raw,'Auto',st);
@@ -71,7 +117,10 @@ $('#scodebtn').onclick=async()=>{const raw=$('#scode').value.trim(),st=$('#scst'
 function clearTracking(){const n=tracked().length;browse=false;try{localStorage.removeItem('md_tracked')}catch{}setTracked([]);lastList=[];Object.keys(lastScores).forEach(k=>delete lastScores[k]);
  $('#matches').innerHTML='';$('#status').textContent='';try{drawVideo()}catch{}toast(n?`Cleared ${n} tracked item(s)`:'Nothing was being tracked');loadScores()}
 document.addEventListener('click',e=>{const t=e.target.closest?e.target:null;if(!t)return;if(t.closest('#golimit')){document.querySelector('nav [data-t=about]').click();setTimeout(()=>document.getElementById('plans-h').scrollIntoView(),60);return}if(t.closest('#clrtrack'))clearTracking();else if(t.closest('#browsebtn')){browse=true;loadScores()}});
-function drawChips(){const t=tracked();$('#chips').innerHTML=t.length?t.map((e,i)=>`<button class="chip on" data-i="${i}" title="Tap to stop tracking">${esc(e.team)}${e.sport!=='soccer'?' · '+esc(spt(e.sport).label.replace(/^\S+\s/,'')):''} ✕</button>`).join(''):'<span class="muted">Nothing tracked yet. Tap teams above to follow them.</span>'}
+function drawChips(){const t=tracked();$('#chips').innerHTML=t.length?t.map((e,i)=>{
+  const extra=e.sport!=='soccer'?' · '+esc(spt(e.sport).label.replace(/^\S+\s/,'')):(e.league&&!WILD.includes((e.league||'').toLowerCase())?' · '+esc(e.league):'');
+  return `<button class="chip on" data-i="${i}" title="Tap to stop tracking">${esc(e.team)}${extra} ✕</button>`;
+ }).join(''):'<span class="muted">Nothing tracked yet. Tap teams above or load a slip to follow them.</span>'}
 $('#chips').onclick=e=>{const i=e.target.dataset?.i;if(i===undefined)return;const t=tracked();t.splice(+i,1);setTracked(t);loadScores()};
 const fmtKick=d=>{if(!d)return '';const k=new Date(d);if(isNaN(k))return '';const n=new Date(),day=x=>new Date(x.getFullYear(),x.getMonth(),x.getDate()),diff=Math.round((day(k)-day(n))/864e5);
  const p=diff===0?'Today':diff===1?'Tomorrow':diff===-1?'Yesterday':k.toLocaleDateString([], {weekday:'short',day:'2-digit',month:'short'});return p+' '+k.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})};
@@ -93,9 +142,23 @@ async function cricketEvents(names,limit){const ids=[];for(const n of names)try{
  const out=[],seen=new Set();await Promise.allSettled(ids.slice(0,Math.max(1,limit)).map(async lg=>{const r=await fetchT(`https://site.api.espn.com/apis/site/v2/sports/cricket/${lg}/scoreboard`);if(!r.ok)return;
   for(const ev of(await r.json()).events||[])if(ev.id&&!seen.has(ev.id)&&recentCk(ev)){seen.add(ev.id);out.push({...ev,_sport:'cricket',_league:lg})}}));return out}
 function filterEvents(ev,tr){if(!tr.length)return ev;
- return ev.filter(m=>{const[h,a]=comps(m),hn=(h.team?.displayName||'').toLowerCase(),an=(a.team?.displayName||'').toLowerCase();
-  return tr.some(e=>{const et=e.team.toLowerCase();if(m._sport==='f1')return e.sport==='f1';
-   if(et.startsWith('🌐'))return e.sport===m._sport&&(WILD.includes((e.league||'').toLowerCase())||e.league===m._league);return et&&(hn.includes(et)||an.includes(et))})}).sort((x,y)=>new Date(x.date)-new Date(y.date))}
+ return ev.filter(m=>{
+  const[h,a]=comps(m),hn=h.team?.displayName||h.athlete?.displayName||'',an=a.team?.displayName||a.athlete?.displayName||'';
+  return tr.some(e=>{
+    if(m._sport==='f1')return e.sport==='f1';
+    const et=(e.team||'').trim();
+    if(et.startsWith('🌐'))return e.sport===m._sport&&(WILD.includes((e.league||'').toLowerCase())||e.league===m._league);
+    // Match either side with robust name comparison (aliases + normalization)
+    return teamMatch(et,hn)||teamMatch(et,an);
+  });
+ }).sort((x,y)=>{
+  // Live first, then upcoming, then finished (most recent first among finished)
+  const sx=x.status?.type?.state||'',sy=y.status?.type?.state||'';
+  const rank=s=>({in:0,pre:1,post:2}[s]??3);
+  const r=rank(sx)-rank(sy);if(r)return r;
+  if(sx==='post'&&sy==='post')return new Date(y.date)-new Date(x.date);
+  return new Date(x.date)-new Date(y.date);
+ })}
 const lastScores={};
 function beep(){try{const c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.value=.15;o.start();o.stop(c.currentTime+.25)}catch{}}
 function alertGoal(title,body){const st=store.get('alerts',{notif:false,sound:true});
@@ -108,8 +171,9 @@ function card(m){const sp=spt(m._sport),st=m.status?.type||{},live=st.state==='i
  const[h,a]=comps(m),pre=st.state==='pre',id=m.id||m.name,cur=`${h.score}-${a.score}`,changed=lastScores[id]!==undefined&&lastScores[id]!==cur&&live;
  if(changed)alertGoal('⚡ '+sp.goal+'!',`${h.team?.displayName} ${h.score} - ${a.score} ${a.team?.displayName}`);lastScores[id]=cur;
  const nm=c=>c.team?.displayName||c.athlete?.displayName||'?';
- return `<div class="card"><div class="m"><span class="muted">${sp.label} · <span class="${live?'live':''}">${live?'● ':''}${esc(st.shortDetail||st.detail||'')}</span></span><span class="muted">🕒 ${esc(fmtKick(m.date))}</span></div>
- <div class="m" style="margin-top:6px"><div><b>${esc(nm(h))}</b><br><b>${esc(nm(a))}</b></div><div class="sc" style="${changed?'color:var(--r)':''}">${pre?'–':esc(h.score??'')+'<br>'+esc(a.score??'')}</div></div></div>`}
+ const done=st.state==='post';
+ return `<div class="card"><div class="m"><span class="muted">${sp.label} · <span class="${live?'live':done?'':''}">${live?'● ':''}${esc(st.shortDetail||st.detail||(done?'FT':''))}</span></span><span class="muted">🕒 ${esc(fmtKick(m.date))}</span></div>
+ <div class="m" style="margin-top:6px"><div><b>${esc(nm(h))}</b><br><b>${esc(nm(a))}</b></div><div class="sc" style="${changed?'color:var(--r)':done?'opacity:.95':''}">${pre?'–':esc(h.score??'')+'<br>'+esc(a.score??'')}${done&&!pre?'<div class="muted" style="font-size:.75em;margin-top:2px">FT</div>':''}</div></div></div>`}
 let lastList=[];
 let browse=true;   // false right after Clear: show an empty state instead of the whole league
 let loadSeq=0;   // a newer refresh always wins: a slow older one must never repaint over it
@@ -120,14 +184,31 @@ async function loadScores(){const my=++loadSeq,stEl=$('#status'),box=$('#matches
   else if(league)pairs.add(sport+'|'+league);else if(sport==='soccer')MAJOR.forEach(l=>pairs.add('soccer|'+l))};
  if(!tr.length&&!browse){lastList=[];box.innerHTML=`<div class="card"><b>Nothing is being tracked.</b><p class="muted">Pick a league above and tap teams to follow them, or <button class="chip" id="browsebtn">show all matches in ${esc(leagueName())}</button></p></div>`;stEl.textContent='';try{drawVideo()}catch{}if($('#dash').classList.contains('on'))drawDash();return}
  if(!tr.length)consider($('#sport').value,$('#league').value,'');else tr.forEach(e=>consider(e.sport,e.league,e.team));
- [...pairs].forEach(p=>jobs.push({name:p.split('|')[1],run:async()=>{const[sport,lg]=p.split('|');return((await espn(sport,lg,'scoreboard')).events||[]).map(e=>({...e,_sport:sport,_league:lg}))}}));
+ const ymd=d=>{const x=new Date(d);return x.getFullYear()+String(x.getMonth()+1).padStart(2,'0')+String(x.getDate()).padStart(2,'0')};
+ const yday=ymd(Date.now()-864e5);
+ [...pairs].forEach(p=>jobs.push({name:p.split('|')[1],run:async()=>{
+  const[sport,lg]=p.split('|');
+  // Current scoreboard + yesterday so finished matches from the last ~36h still appear with FT score
+  const [cur,past]=await Promise.allSettled([
+    espn(sport,lg,'scoreboard'),
+    espn(sport,lg,'scoreboard','dates='+yday)
+  ]);
+  const seen=new Set(),out=[];
+  for(const r of [cur,past]){
+    if(r.status!=='fulfilled')continue;
+    for(const e of (r.value.events||[])){
+      if(e.id&&!seen.has(e.id)){seen.add(e.id);out.push({...e,_sport:sport,_league:lg})}
+    }
+  }
+  return out;
+ }}));
  if(f1Mode)jobs.push({name:'Formula 1',run:()=>f1Events(f1Mode)});
  if(ckNames)jobs.push({name:'Cricket',run:()=>cricketEvents(ckWhole||!ckNames.length?NATIONS:ckNames,ckWhole||!ckNames.length?10:6)});
  const res=await Promise.allSettled(jobs.map(j=>j.run()));if(my!==loadSeq)return;const ok=res.filter(r=>r.status==='fulfilled');
  if(!ok.length){stEl.textContent=navigator.onLine?'Could not reach the live data feed. Your tracked list is still saved — try Refresh when you are online.':'You are offline.';if(/loading…/.test(box.textContent))box.innerHTML='<p class="muted">Could not load scores right now. Check your connection, then press Refresh.</p>';return}
  const seen=new Set(),ev=[];ok.forEach(r=>r.value.forEach(e=>{if(e.id&&!seen.has(e.id)){seen.add(e.id);ev.push(e)}}));
  const list=filterEvents(ev,tr);lastList=list;
- box.innerHTML=(tr.length?'':`<p class="muted">Nothing tracked – showing all matches in ${esc(leagueName())}. Tap teams above to follow them.</p>`)+(list.length?list.map(card).join(''):`<p class="muted">${tr.length?'No live or upcoming events for what you track right now.':'No matches right now for this league.'}</p>`);
+ box.innerHTML=(tr.length?'':`<p class="muted">Nothing tracked – showing all matches in ${esc(leagueName())}. Tap teams above to follow them.</p>`)+(list.length?list.map(card).join(''):`<p class="muted">${tr.length?'No live, upcoming or recent full-time results for what you track right now. Teams stay in the list above — scores appear when matches are scheduled or finished today/yesterday.':'No matches right now for this league.'}</p>`);
  const bad=res.map((r,i)=>r.status==='rejected'?jobs[i].name:null).filter(Boolean);
  stEl.textContent=`Updated ${new Date().toLocaleTimeString()}${bad.length?` (unreachable: ${bad.slice(0,4).join(', ')}${bad.length>4?'…':''})`:''}`;
  drawVideo();if($('#dash').classList.contains('on'))drawDash()}
