@@ -1,5 +1,5 @@
 'use strict';
-const BUILD='v31';
+const BUILD='v28';
 let _tt;function toast(m){let e=document.getElementById('toast');if(!e){e=document.createElement('div');e.id='toast';e.setAttribute('role','status');document.body.appendChild(e)}e.textContent=m;e.className='show';clearTimeout(_tt);_tt=setTimeout(()=>e.className='',2600)}
 (function selfHeal(){try{if(localStorage.getItem('md_build')===BUILD)return;localStorage.setItem('md_build',BUILD);
  if(!('serviceWorker' in navigator)||!navigator.serviceWorker.controller)return;   // nothing stale is in control
@@ -19,7 +19,7 @@ document.addEventListener('click',e=>{
   const go=e.target.closest?.('[data-go]');
   if(go&&go.dataset.go){e.preventDefault();goTab(go.dataset.go,go.dataset.plans);return}
   if(e.target.closest?.('#reanalyze')){e.preventDefault();const s=store.get('last_slip','');if(!s){toast('No previous slip saved yet — analyze one first');return}goTab('analyzer');const box=$('#slip');if(box)box.value=s;setTimeout(()=>{try{$('#analyze').click()}catch{}},120);return}
-  if(e.target.closest?.('#track-from-analysis')){e.preventDefault();goTab('scores');toast('Looking up teams…');(async()=>{const r=await addSlipTeams(lastLegs);toast(r?`Tracking ${r[0]} of ${r[1]} team(s) from this analysis`:'No team names found on this slip — check match names');try{await loadScores()}catch{}})();return}
+  if(e.target.closest?.('#track-from-analysis')){e.preventDefault();const r=addSlipTeams(lastLegs);toast(r?`Tracking ${r[0]} of ${r[1]} team(s) from this analysis`:'No team names found on this slip — check match names');goTab('scores');try{loadScores()}catch{};return}
 });
 
 // ---------- live scores tracker (ported from the desktop TrackerTab) + cricket + F1 + video + dashboard ----------
@@ -29,7 +29,7 @@ const SPORTS={
  cricket:{label:'🏏 Cricket',goal:'WICKET',special:'cricket',leagues:[['current','Current / live matches','🏏 Cricket']]},
  f1:{label:'🏁 Formula 1',goal:'LAP',special:'f1',leagues:[['latest','Current / latest race weekend','🏁 Formula 1'],['season','Whole season','🏁 Formula 1']]}};
 const spt=k=>SPORTS[k]||{label:'🏟 '+k,path:k,goal:'SCORE'};
-const MAJOR=['eng.1','eng.2','esp.1','ita.1','ger.1','fra.1','ned.1','por.1','sco.1','tur.1','bel.1','rsa.1','rsa.mtn8','gha.1','nga.1','uefa.champions','uefa.europa','uefa.europa.conf','caf.champions','caf.confed','caf.nations','usa.1','bra.1','arg.1','ksa.1'];
+const MAJOR=['eng.1','esp.1','ita.1','ger.1','fra.1','ned.1','por.1','rsa.1','uefa.champions','uefa.europa','uefa.europa.conf','caf.champions','caf.confed'];
 const NATIONS=['India','Australia','England','South Africa','Pakistan','New Zealand','Sri Lanka','West Indies','Bangladesh','Afghanistan','Zimbabwe','Ireland'];
 const fetchT=async(url,ms=10000)=>{const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{return await fetch(url,{signal:c.signal})}finally{clearTimeout(t)}};
 const MAX_TRACK=20,sleep=ms=>new Promise(r=>setTimeout(r,ms)),WILD=['','current','upcoming','latest','season'];
@@ -44,25 +44,15 @@ function normTeam(n){
 }
 function teamMatch(trackedName, displayName){
   if(!trackedName||!displayName)return false;
-  const et=normTeam(typeof alias==='function'?alias(trackedName):trackedName);
-  const hn=normTeam(displayName);
+  const et=normTeam(alias?alias(trackedName):trackedName), hn=normTeam(displayName);
   if(!et||!hn)return false;
-  // Exact after normalize
-  if(et===hn)return true;
-  // One name fully contains the other only if the shorter is long enough (avoids "united", "city", "chiefs" false hits)
-  const [sh,lo]=et.length<=hn.length?[et,hn]:[hn,et];
-  if(sh.length>=8&&lo.includes(sh))return true;
-  // Token match: significant words of the shorter name must all appear as whole tokens in the longer
-  const stop=new Set(['and','the','of','fc','cf','sc','united','city','town','hotspur','wanderers','athletic','sporting','real','club','de','la','afc','cfc']);
-  const tok=s=>s.split(' ').filter(w=>w.length>2&&!stop.has(w));
+  if(hn===et||hn.includes(et)||et.includes(hn))return true;
+  // token overlap: require the significant tokens of the shorter name to appear in the longer
+  const tok=s=>s.split(' ').filter(w=>w.length>2&&!['and','the','united','city','town','hotspur','wanderers','athletic','sporting','real'].includes(w));
   const a=tok(et), b=tok(hn);
-  if(!a.length||!b.length)return false;
-  // Prefer when the distinctive tokens of the tracked name all appear in the display name
-  const trackedToks=a.length<=b.length?a:b;
-  const otherToks=a.length<=b.length?b:a;
-  // If tracked has at least one distinctive token, all of them must match
-  if(trackedToks.length===0)return false;
-  return trackedToks.every(t=>otherToks.some(x=>x===t||(t.length>=5&&(x.startsWith(t)||t.startsWith(x)))));
+  if(!a.length||!b.length)return et.length>=4&&(hn.includes(et)||et.includes(hn));
+  const [sh,lo]=a.length<=b.length?[a,b]:[b,a];
+  return sh.every(t=>lo.some(x=>x===t||x.startsWith(t)||t.startsWith(x)));
 }
 
 $('#sport').innerHTML=Object.entries(SPORTS).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join('');
@@ -89,17 +79,11 @@ function addEntries(list){const t=tracked();let add=0;for(const e of list){if(t.
   const tn=(e.team||'').toLowerCase().trim();if(!tn)continue;
   const exists=t.some(x=>x.sport===e.sport&&(x.team||'').toLowerCase().trim()===tn);
   if(exists){
+    // Prefer keeping a specific league if the new one is empty, or upgrade empty to specific
     const idx=t.findIndex(x=>x.sport===e.sport&&(x.team||'').toLowerCase().trim()===tn);
-    if(idx>=0){
-      if(!(t[idx].league||'')&&(e.league||''))t[idx].league=e.league;
-      if(!t[idx].espnId&&e.espnId)t[idx].espnId=e.espnId;
-      // Prefer canonical ESPN name when we resolved one
-      if(e.espnId&&e.team&&e.team!==t[idx].team)t[idx].team=e.team;
-    }
+    if(idx>=0&&!(t[idx].league||'')&&(e.league||'')){t[idx].league=e.league}
     continue}
-  const row={team:e.team.trim(),sport:e.sport||'soccer',league:e.league||''};
-  if(e.espnId)row.espnId=e.espnId;
-  t.push(row);add++}
+  t.push({team:e.team.trim(),sport:e.sport||'soccer',league:e.league||''});add++}
  setTracked(t);return add}
 function toggleTeam(n){let t=tracked();const sport=$('#sport').value,lg=$('#league').value,i=t.findIndex(e=>e.sport===sport&&e.team.toLowerCase()===n.toLowerCase());
  if(i>=0){t.splice(i,1);setTracked(t)}else{if(t.length>=MAX_TRACK){$('#status').textContent=`You can track up to ${MAX_TRACK} items.`;return}addEntries([{team:n,sport,league:lg}])}loadScores()}
@@ -107,52 +91,29 @@ $('#twhole').onclick=()=>{addEntries([{team:'🌐 '+leagueName(),sport:$('#sport
 $('#madd').onclick=()=>{const sport=$('#msport').value.trim().toLowerCase(),lg=$('#mleague').value.trim(),team=$('#mteam').value.trim(),st=$('#mst');
  if(!sport||!lg){st.textContent='Enter a sport and a league code (for example soccer + eng.1).';return}
  const n=addEntries([{team:team||'🌐 '+sport+'/'+lg,sport,league:lg}]);st.textContent=n?`Tracking ${team||'the whole '+lg+' league'} (${sport}/${lg}). If nothing shows up, check the league code.`:'Already tracking that (or the limit of '+MAX_TRACK+' is reached).';$('#mteam').value='';loadScores()};
-async function addSlipTeams(legs){
+function addSlipTeams(legs){
   const raw=(legs||[]).flatMap(l=>teamsOf(l.match)).filter(Boolean);
+  // Prefer longer / more complete names, apply alias, dedupe by normalized key
   const byKey=new Map();
   for(const n of raw){
     const cleaned=(n||'').replace(/\s+/g,' ').trim();
     if(!cleaned||cleaned.length<2)continue;
-    const can=typeof alias==='function'?alias(cleaned):cleaned;
+    const can=alias(cleaned);
     const key=normTeam(can);
     if(!key)continue;
     const prev=byKey.get(key);
-    if(!prev||can.length>prev.team.length)byKey.set(key,{team:can,sport:'soccer',league:''});
+    // keep the nicer display name (prefer the aliased or longer original)
+    if(!prev||can.length>prev.team.length||(can===cleaned&&prev.team!==cleaned))byKey.set(key,{team:can,sport:'soccer',league:''});
   }
-  let entries=[...byKey.values()];
+  const entries=[...byKey.values()];
   if(!entries.length)return null;
-  // Resolve each team against ESPN so we store the real league + canonical name
-  // This is what makes scores and upcoming fixtures actually appear
-  const resolved=[];
-  for(const e of entries){
-    try{
-      const hit=await espnFindTeam(e.team, null);
-      if(hit&&hit.comp){
-        resolved.push({team:hit.name||e.team, sport:'soccer', league:hit.comp, espnId:hit.id});
-      }else{
-        // keep unresolved so the chip still shows; scores may appear if name matches MAJOR leagues
-        resolved.push(e);
-      }
-    }catch{
-      resolved.push(e);
-    }
-  }
-  // Deduplicate again after resolution (same club found under different slip spellings)
-  const final=[];
-  const seen=new Set();
-  for(const e of resolved){
-    const k=(e.espnId?('id:'+e.espnId):('n:'+normTeam(e.team)+'|'+ (e.league||'')));
-    if(seen.has(k))continue;
-    seen.add(k);
-    final.push(e);
-  }
-  return[addEntries(final),final.length]}
-$('#fromslip').onclick=async()=>{$('#status').textContent='Looking up teams from your slip…';const r=await addSlipTeams(lastLegs);$('#status').textContent=r?`Added ${r[0]} of ${r[1]} team(s) from your slip (matched to their leagues where possible).`:'No teams found – analyze a slip first.';await loadScores()};
+  return[addEntries(entries),entries.length]}
+$('#fromslip').onclick=()=>{const r=addSlipTeams(lastLegs);$('#status').textContent=r?`Added ${r[0]} of ${r[1]} team(s) from your slip. They are looked up in the major leagues and cups; for a team in another league, open that league and tap the team.`:'No teams found – analyze a slip first.';loadScores()};
 $('#scodebtn').onclick=async()=>{const raw=$('#scode').value.trim(),st=$('#scst');if(!raw){st.textContent='Type or paste a booking code, Bet ID or link first.';return}
  let text=raw;if(!looksLikeSlip(raw)){st.textContent='Loading the slip from the bookmaker…';const hr=await helperResolve(raw,'Auto',st);
   if(!hr){st.innerHTML='Loading a code needs the MatchDesk server (or the local helper). You can paste the slip text here instead. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
   if(!hr.ok){st.innerHTML=esc(diagnoseCodeError(hr.message||'Could not load that code.',raw,'Auto'))+' '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}text=hr.text}
- st.textContent='Looking up teams…';const r=await addSlipTeams(parse(text));st.textContent=r?`Added ${r[0]} of ${r[1]} team(s) from that slip to your tracking.`:'No teams found in that slip.';await loadScores()};
+ const r=addSlipTeams(parse(text));st.textContent=r?`Added ${r[0]} of ${r[1]} team(s) from that slip to your tracking.`:'No teams found in that slip.';loadScores()};
 function clearTracking(){const n=tracked().length;browse=false;try{localStorage.removeItem('md_tracked')}catch{}setTracked([]);lastList=[];Object.keys(lastScores).forEach(k=>delete lastScores[k]);
  $('#matches').innerHTML='';$('#status').textContent='';try{drawVideo()}catch{}toast(n?`Cleared ${n} tracked item(s)`:'Nothing was being tracked');loadScores()}
 document.addEventListener('click',e=>{const t=e.target.closest?e.target:null;if(!t)return;if(t.closest('#golimit')){document.querySelector('nav [data-t=about]').click();setTimeout(()=>document.getElementById('plans-h').scrollIntoView(),60);return}if(t.closest('#clrtrack'))clearTracking();else if(t.closest('#browsebtn')){browse=true;loadScores()}});
@@ -183,21 +144,15 @@ async function cricketEvents(names,limit){const ids=[];for(const n of names)try{
 function filterEvents(ev,tr){if(!tr.length)return ev;
  return ev.filter(m=>{
   const[h,a]=comps(m),hn=h.team?.displayName||h.athlete?.displayName||'',an=a.team?.displayName||a.athlete?.displayName||'';
-  const hid=String(h.team?.id||h.id||''), aid=String(a.team?.id||a.id||'');
   return tr.some(e=>{
     if(m._sport==='f1')return e.sport==='f1';
     const et=(e.team||'').trim();
     if(et.startsWith('🌐'))return e.sport===m._sport&&(WILD.includes((e.league||'').toLowerCase())||e.league===m._league);
-    // 1) If we resolved this team on ESPN — match ONLY by team id (no false name hits)
-    if(e.espnId){
-      return String(e.espnId)===hid||String(e.espnId)===aid;
-    }
-    // 2) If tracked with a specific league, only accept events from that league
-    if(e.league&&!WILD.includes((e.league||'').toLowerCase())&&e.league!==m._league)return false;
-    // 3) Strict name match only
+    // Match either side with robust name comparison (aliases + normalization)
     return teamMatch(et,hn)||teamMatch(et,an);
   });
  }).sort((x,y)=>{
+  // Live first, then upcoming, then finished (most recent first among finished)
   const sx=x.status?.type?.state||'',sy=y.status?.type?.state||'';
   const rank=s=>({in:0,pre:1,post:2}[s]??3);
   const r=rank(sx)-rank(sy);if(r)return r;
@@ -230,17 +185,16 @@ async function loadScores(){const my=++loadSeq,stEl=$('#status'),box=$('#matches
  if(!tr.length&&!browse){lastList=[];box.innerHTML=`<div class="card"><b>Nothing is being tracked.</b><p class="muted">Pick a league above and tap teams to follow them, or <button class="chip" id="browsebtn">show all matches in ${esc(leagueName())}</button></p></div>`;stEl.textContent='';try{drawVideo()}catch{}if($('#dash').classList.contains('on'))drawDash();return}
  if(!tr.length)consider($('#sport').value,$('#league').value,'');else tr.forEach(e=>consider(e.sport,e.league,e.team));
  const ymd=d=>{const x=new Date(d);return x.getFullYear()+String(x.getMonth()+1).padStart(2,'0')+String(x.getDate()).padStart(2,'0')};
- // Yesterday + today + next 5 days so finished, live and upcoming fixtures all appear
- const dateList=[];
- for(let i=-1;i<=5;i++)dateList.push(ymd(Date.now()+i*864e5));
+ const yday=ymd(Date.now()-864e5);
  [...pairs].forEach(p=>jobs.push({name:p.split('|')[1],run:async()=>{
   const[sport,lg]=p.split('|');
-  // Default scoreboard (current) + explicit date boards for recent FT and upcoming
-  const fetches=[espn(sport,lg,'scoreboard')];
-  for(const d of dateList)fetches.push(espn(sport,lg,'scoreboard','dates='+d));
-  const results=await Promise.allSettled(fetches);
+  // Current scoreboard + yesterday so finished matches from the last ~36h still appear with FT score
+  const [cur,past]=await Promise.allSettled([
+    espn(sport,lg,'scoreboard'),
+    espn(sport,lg,'scoreboard','dates='+yday)
+  ]);
   const seen=new Set(),out=[];
-  for(const r of results){
+  for(const r of [cur,past]){
     if(r.status!=='fulfilled')continue;
     for(const e of (r.value.events||[])){
       if(e.id&&!seen.has(e.id)){seen.add(e.id);out.push({...e,_sport:sport,_league:lg})}
@@ -254,7 +208,7 @@ async function loadScores(){const my=++loadSeq,stEl=$('#status'),box=$('#matches
  if(!ok.length){stEl.textContent=navigator.onLine?'Could not reach the live data feed. Your tracked list is still saved — try Refresh when you are online.':'You are offline.';if(/loading…/.test(box.textContent))box.innerHTML='<p class="muted">Could not load scores right now. Check your connection, then press Refresh.</p>';return}
  const seen=new Set(),ev=[];ok.forEach(r=>r.value.forEach(e=>{if(e.id&&!seen.has(e.id)){seen.add(e.id);ev.push(e)}}));
  const list=filterEvents(ev,tr);lastList=list;
- box.innerHTML=(tr.length?'':`<p class="muted">Nothing tracked – showing all matches in ${esc(leagueName())}. Tap teams above to follow them.</p>`)+(list.length?list.map(card).join(''):`<p class="muted">${tr.length?'No live, upcoming (next few days) or recent full-time results found for these teams yet. They stay tracked above — try Refresh, or open the team\'s league and track it manually if it is a lower division.':'No matches right now for this league.'}</p>`);
+ box.innerHTML=(tr.length?'':`<p class="muted">Nothing tracked – showing all matches in ${esc(leagueName())}. Tap teams above to follow them.</p>`)+(list.length?list.map(card).join(''):`<p class="muted">${tr.length?'No live, upcoming or recent full-time results for what you track right now. Teams stay in the list above — scores appear when matches are scheduled or finished today/yesterday.':'No matches right now for this league.'}</p>`);
  const bad=res.map((r,i)=>r.status==='rejected'?jobs[i].name:null).filter(Boolean);
  stEl.textContent=`Updated ${new Date().toLocaleTimeString()}${bad.length?` (unreachable: ${bad.slice(0,4).join(', ')}${bad.length>4?'…':''})`:''}`;
  drawVideo();if($('#dash').classList.contains('on'))drawDash()}
@@ -372,17 +326,7 @@ function parseCrit(text){const raw=(text||'').trim(),low=raw.toLowerCase(),o={ra
  if(low.includes('corner')){o.market='Total Corners';m=low.match(/\b(over|under)\s*\(?\s*(\d+(?:\.\d+)?)\s*\)?/);if(m){o.kind='corners_'+m[1];o.line=parseFloat(m[2])}return o}
  if(low.includes('highest scoring half')){o.market='Highest Scoring Half';if(/2nd|second/.test(low))o.kind='hsh_2h';else if(/1st|first/.test(low))o.kind='hsh_1h';return o}
  if(low.includes('win either half')){o.market='Win Either Half';o.kind='win_either_half';m=low.match(/^(.+?)\s+to\s+win either half/);if(m)o.side=m[1].trim();return o}
- if(/\b(match result|full time result|1x2|to win)\b/.test(low)||o.market==='1X2'){o.market='1X2';o.kind='win';
-  if(/\bdraw\b/.test(low)||/\bx\b/.test(low)){o.kind='draw';o.side='draw'}
-  else if(/\bhome\b/.test(low)||/\b1\b/.test(low)){o.kind='home';o.side='home'}
-  else if(/\baway\b/.test(low)||/\b2\b/.test(low)){o.kind='away';o.side='away'}
-  else{
-    // selection is often the team name itself
-    const after=low.split(/[:\-–—]/).pop()||low;
-    const nm=after.replace(/\b(to win|win|match result|full time|1x2|home|away|draw)\b/g,'').trim();
-    if(nm&&nm.length>=3)o.side=nm;
-  }
-  return o}
+ if(/\b(match result|full time result|1x2|to win)\b/.test(low)){o.market='1X2';o.kind='win';return o}
  return o}
 function evalCrit(c,hf,af,hn='',an=''){
  if(!c||c.kind==='other')return[null,'',0];hf=hf||{};af=af||{};
@@ -393,25 +337,11 @@ function evalCrit(c,hf,af,hn='',an=''){
   const pk={1.5:'over15_pct',2.5:'over25_pct',3.5:'over35_pct'}[line];
   if(pk){const a=avg(pk),lb=`${kind==='over'?'Over':'Under'} ${line}`;
    if(kind==='over'){if(a>=58)return[true,`Form backs ${lb}: recent O${line} rate ~${a.toFixed(0)}%.`,.03];if(a<=35)return[false,`Form disagrees with ${lb}: recent O${line} rate only ~${a.toFixed(0)}%.`,-.04]}
-   else{const u=100-a;if(u>=58)return[true,`Form backs ${lb}: recent U${line} rate ~${u.toFixed(0)}%.`,.03];if(u<=35)return[false,`Form disagrees with ${lb}: recent U${line} rate only ~${u.toFixed(0)}%.`,-.04]}
-   return[null,'',0]}
-  // Non-standard lines (1.75, 2.0, 3.0, 4.5…): blend nearest known rates + avg goals
-  const t=avg('avg_total'), o15=avg('over15_pct'), o25=avg('over25_pct'), o35=avg('over35_pct');
-  let est=null;
-  if(line<=1.5&&o15!=null)est=o15;
-  else if(line>=3.5&&o35!=null)est=o35;
-  else if(line>1.5&&line<2.5&&o15!=null&&o25!=null)est=o15+(o25-o15)*((line-1.5)/1);
-  else if(line>2.5&&line<3.5&&o25!=null&&o35!=null)est=o25+(o35-o25)*((line-2.5)/1);
-  else if(line===2.5&&o25!=null)est=o25;
-  else if(line===2&&o15!=null&&o25!=null)est=(o15+o25)/2;
-  else if(t>0){
-    // rough Poisson-style: P(total > line) ~ higher when avg goals clearly above line
-    const gap=t-line;
-    est=gap>=1.2?72:gap>=.6?62:gap>=.2?52:gap>=-.2?45:gap>=-.6?35:25;
-  }
-  if(est!=null){const lb=`${kind==='over'?'Over':'Under'} ${line}`;
-   if(kind==='over'){if(est>=58)return[true,`Form backs ${lb}: estimated O${line} rate ~${est.toFixed(0)}% (avg goals ${t?t.toFixed(1):'n/a'}).`,.025];if(est<=35)return[false,`Form disagrees with ${lb}: estimated rate only ~${est.toFixed(0)}%.`,-.035]}
-   else{const u=100-est;if(u>=58)return[true,`Form backs ${lb}: estimated U${line} rate ~${u.toFixed(0)}% (avg goals ${t?t.toFixed(1):'n/a'}).`,.025];if(u<=35)return[false,`Form disagrees with ${lb}: estimated U rate only ~${u.toFixed(0)}%.`,-.035]}}
+   else{const u=100-a;if(u>=58)return[true,`Form backs ${lb}: recent U${line} rate ~${u.toFixed(0)}%.`,.03];if(u<=35)return[false,`Form disagrees with ${lb}: recent U${line} rate only ~${u.toFixed(0)}%.`,-.04]}}
+  else{const t=avg('avg_total');if(t>0){
+   if(kind==='under'&&line>=4.5&&t<=line-1.5)return[true,`Form backs Under ${line}: teams average only ${t.toFixed(1)} goals.`,.02];
+   if(kind==='under'&&line>=4.5&&t>=line-.3)return[false,`Form questions Under ${line}: teams average ${t.toFixed(1)} goals.`,-.03];
+   if(kind==='over'&&line<=1.5&&t>=2.4)return[true,`Form backs Over ${line}: teams average ${t.toFixed(1)} goals.`,.02]}}
   return[null,'',0]}
  if((kind==='over'||kind==='under')&&typeof c.side==='string'&&c.side.startsWith('team:')){const tb=c.side.slice(5).trim();let use=null;const hl=hn.toLowerCase(),al=an.toLowerCase();
   if(hn&&tb&&hl.includes(tb))use=hf;else if(an&&tb&&al.includes(tb))use=af;
@@ -437,35 +367,6 @@ function evalCrit(c,hf,af,hn='',an=''){
   if(use&&use.avg_scored!=null){if(use.avg_scored>=1.4&&(use.win_pct||0)>=40)return[true,`Form mildly backs win-either-half: avg scored ${use.avg_scored.toFixed(1)}, win% ${(use.win_pct||0).toFixed(0)}.`,.015];
    if(use.avg_scored<=.7)return[false,`Form questions win-either-half: avg scored only ${use.avg_scored.toFixed(1)}.`,-.025]}
   return[null,'',0]}
- // 1X2 / team to win — use the selected side's recent win% and goal edge
- if(kind==='win'||kind==='home'||kind==='away'||kind==='draw'){
-  const side=(c.side||'').toLowerCase();
-  let use=null,label='';
-  if(kind==='draw'||side==='draw'||side==='x'){
-    const dp=((hf.draw_pct||0)+(af.draw_pct||0))/2;
-    if(dp>=32)return[true,`Form mildly backs a draw: recent draw rate ~${dp.toFixed(0)}%.`,.02];
-    if(dp<=18)return[false,`Form questions a draw: recent draw rate only ~${dp.toFixed(0)}%.`,-.03];
-    return[null,'',0];
-  }
-  if(kind==='home'||side==='home'||side==='1'){use=hf;label=hn||'home'}
-  else if(kind==='away'||side==='away'||side==='2'){use=af;label=an||'away'}
-  else if(side&&hn&&(hn.toLowerCase().includes(side)||side.includes(hn.toLowerCase().split(' ')[0]))){use=hf;label=hn}
-  else if(side&&an&&(an.toLowerCase().includes(side)||side.includes(an.toLowerCase().split(' ')[0]))){use=af;label=an}
-  else if(side){
-    // try token match against team names
-    const st=side.split(/\s+/).filter(w=>w.length>2);
-    if(st.some(w=>hn.toLowerCase().includes(w))){use=hf;label=hn}
-    else if(st.some(w=>an.toLowerCase().includes(w))){use=af;label=an}
-  }
-  if(use&&(use.win_pct!=null||use.avg_scored!=null)){
-    const wp=use.win_pct||0, opp=use===hf?af:hf, owp=opp.win_pct||0;
-    const edge=(use.avg_scored||0)-(use.avg_conceded||0), oedge=(opp.avg_scored||0)-(opp.avg_conceded||0);
-    if(wp>=55&&wp>=owp+8)return[true,`Form backs ${label||'this side'}: win rate ${wp.toFixed(0)}% vs opponent ${owp.toFixed(0)}%.`,.035];
-    if(wp>=48&&edge>=0.4&&edge>=oedge+.3)return[true,`Form mildly backs ${label||'this side'}: win ${wp.toFixed(0)}%, goal edge ${edge>=0?'+':''}${edge.toFixed(1)}.`,.02];
-    if(wp<=30||(wp<=owp-12&&edge<=-0.3))return[false,`Form questions ${label||'this side'}: win rate only ${wp.toFixed(0)}% (opp ${owp.toFixed(0)}%).`,-.04];
-    if(wp<=35&&edge<=-0.5)return[false,`Form disagrees with ${label||'this side'}: poor recent edge (${edge.toFixed(1)}).`,-.03];
-  }
-  return[null,'',0]}
  return[null,'',0]}
 function legKind(l){for(const c of l._criteria||[]){if((c.kind==='over'||c.kind==='under')&&c.line!=null)return[c.kind,c.line];if(c.kind==='btts_yes'||c.kind==='btts_no')return[c.kind,null]}
  const sel=(l.sel||'').toLowerCase().trim(),m=sel.match(/\b(over|under)\s*(\d+(?:.\d+)?)/);if(m)return[m[1],parseFloat(m[2])];
@@ -473,18 +374,9 @@ function legKind(l){for(const c of l._criteria||[]){if((c.kind==='over'||c.kind=
 function formCross(l){const S=l._form_support||[],F=l._form_flags||[];if(S.length||F.length)return F.length?[false,F[0]]:[true,S[0]];
  const hf=l.home_form,af=l.away_form;if(!hf||!af)return[null,''];if(Math.min(hf.played||0,af.played||0)<5)return[null,''];
  const k=legKind(l);if(!k)return[null,''];const[kind,line]=k,tag=`${l.sel||''} (${l.match||''})`;
- if(kind==='over'||kind==='under'){
-  const pk={1.5:'over15_pct',2.5:'over25_pct',3.5:'over35_pct'}[line];
-  let a=null;
-  if(pk)a=((hf[pk]||0)+(af[pk]||0))/2;
-  else{
-    const t=((hf.avg_total||0)+(af.avg_total||0))/2,gap=t-line;
-    a=gap>=1.2?72:gap>=.6?62:gap>=.2?52:gap>=-.2?45:gap>=-.6?35:25;
-  }
-  if(a==null)return[null,''];
+ if(kind==='over'||kind==='under'){const pk={1.5:'over15_pct',2.5:'over25_pct',3.5:'over35_pct'}[line];if(!pk)return[null,''];const a=((hf[pk]||0)+(af[pk]||0))/2;
   if(kind==='over'){if(a>=58)return[true,`Recent form backs ${tag}: O${line} rate ~${a.toFixed(0)}%.`];if(a<=35)return[false,`Recent form disagrees with ${tag}: O${line} rate only ~${a.toFixed(0)}%.`]}
-  else{const u=100-a;if(u>=58)return[true,`Recent form backs ${tag}: U${line} rate ~${u.toFixed(0)}%.`];if(u<=35)return[false,`Recent form disagrees with ${tag}: U${line} rate only ~${u.toFixed(0)}%.`]}
-  return[null,'']}
+  else{const u=100-a;if(u>=58)return[true,`Recent form backs ${tag}: U${line} rate ~${u.toFixed(0)}%.`];if(u<=35)return[false,`Recent form disagrees with ${tag}: U${line} rate only ~${u.toFixed(0)}%.`]}return[null,'']}
  const a=((hf.btts_pct||0)+(af.btts_pct||0))/2;
  if(kind==='btts_yes'){if(a>=58)return[true,`Recent form backs ${tag}: BTTS rate ~${a.toFixed(0)}%.`];if(a<=35)return[false,`Recent form disagrees with ${tag}: BTTS rate only ~${a.toFixed(0)}%.`]}
  else{if(a<=40)return[true,`Recent form backs ${tag}: BTTS only ~${a.toFixed(0)}%.`];if(a>=65)return[false,`Recent form disagrees with ${tag}: BTTS rate ~${a.toFixed(0)}%.`]}
@@ -528,12 +420,8 @@ function analyze(legs,odds,prob,margin,target){
  const seen={};for(const l of legs){const m=(l.match||'').trim().toLowerCase();if(m&&m!=='unknown'&&!l.is_bab)seen[m]=(seen[m]||0)+1}
  if(Object.values(seen).some(c=>c>1))fl.push('Two or more legs come from the SAME match — they are correlated, so the combined probability shown is only rough.');
  for(const n of corrNotes(legs))if(!fl.includes(n))fl.push(n);
- let formMissing=0;
  for(const l of legs){if(l.is_bab)continue;for(const x of (l._form_support||[]))if(!st.includes(x))st.push(x);for(const x of (l._form_flags||[]))if(!fl.includes(x))fl.push(x);
-  if(!(l._form_support||[]).length&&!(l._form_flags||[]).length){
-   if(!l.home_form&&!l.away_form){formMissing++;continue}
-   const[ok,t]=formCross(l);if(ok===true&&!st.includes(t))st.push(t);else if(ok===false&&!fl.includes(t))fl.push(t)}}
- if(formMissing)fl.push(formMissing===1?'1 leg has no form data — its fair % is only the de-vigged book price.':`${formMissing} legs have no form data — their fair % is only the de-vigged book price.`);
+  if(!(l._form_support||[]).length&&!(l._form_flags||[]).length){const[ok,t]=formCross(l);if(ok===true&&!st.includes(t))st.push(t);else if(ok===false&&!fl.includes(t))fl.push(t)}}
  if(!fl.length)fl.push(`No obvious structural red flags, but at ${(prob*100).toFixed(0)}% you'll still lose ~${(100-prob*100).toFixed(0)} times out of 100.`);
  if(mk.includes('1X2'))fl.push('1X2 legs are affected by draws (~25% of matches).');
  return[re,st,fl]}
@@ -542,10 +430,6 @@ function combos(legs,target){
  (function dfs(s,ch,co){if(raw.length>=MAX_COMBOS)return;if(ch.length)raw.push([ch.slice(),co]);
   for(let i=s;i<u.length;i++){const n=co*u[i].odds;if(n>target+1e-9)break;ch.push(u[i]);dfs(i+1,ch,n);ch.pop()}})(0,[],1);
  const res=raw.map(([c,co])=>{let p=1,g=1;c.forEach(l=>{p*=fair(l);g*=1+marginPct(l)/100});
-  // Soft-dampen joint probability when several legs share the same match (correlated)
-  const byM={};c.forEach(l=>{const k=(l.match||'').trim().toLowerCase();if(k&&k!=='unknown')byM[k]=(byM[k]||0)+1});
-  let corrPairs=0;Object.values(byM).forEach(n=>{if(n>=2)corrPairs+=n*(n-1)/2});
-  if(corrPairs>0){const damp=Math.pow(0.92,corrPairs);p=Math.max(0.01,p*damp)}
   const ms=(g-1)*100,[re,st,fl]=analyze(c,co,p,ms,target),[t,col]=tier(p,co,c.length,ms);
   return{legs:c,odds:co,prob:p,margin:ms,n:c.length,re,st,fl,t,col}});
  const by={};res.forEach(r=>(by[r.n]=by[r.n]||[]).push(r));Object.values(by).forEach(a=>a.sort((x,y)=>y.prob-x.prob));
@@ -732,18 +616,9 @@ function totalCheck(prod,text){
 let lastLegs=[],lastCombos=[],lastTarget=5,shown=PAGE,lastText='';
 const teamsOf=m=>{const p=String(m||'').split(/\s+(?:-|–|—|vs\.?|v\.?)\s+/i);return p.length>=2&&p[0].trim()&&p[1].trim()&&String(m).toLowerCase()!=='unknown'?[p[0].trim(),p.slice(1).join(' - ').trim()]:[null,null]};
 const alias=n=>ALIASES[(n||'').toLowerCase().trim()]||n;
-function dataConf(l){
- const S=l._form_support||[],F=l._form_flags||[];
- if(l.home_form&&l.away_form){
-  const n=(l._criteria||[]).filter(c=>c.kind!=='other').length;
-  if(F.length&&!S.length)return['Form disagrees','--o',`Recent form argues against this pick${l._src?' ('+l._src+')':''} · ${F.length} flag(s)`+(n?` · ${n} criteria classified`:'')];
-  if(S.length&&!F.length)return['Form backs pick','--g',`Recent form supports this pick${l._src?' ('+l._src+')':''} · ${S.length} signal(s)`+(n?` · ${n} criteria classified`:'')];
-  if(S.length||F.length)return['Form mixed','--y',`Form loaded${l._src?' ('+l._src+')':''} · ${S.length} backed · ${F.length} disagreed`+(n?` · ${n} criteria classified`:'')];
-  return['Form available','--g',`Form loaded${l._src?' ('+l._src+')':''} but no strong signal either way`+(n?` · ${n} criteria classified`:'')];
- }
- if(l.home_form||l.away_form)return['Partial form','--y','Only one side matched in '+(l._src||'the data source')+' — fair % is mostly the de-vigged price'];
- if(l._form_lookup==='failed')return['Odds only','--y','Teams not found in form data — showing book price with margin removed only'];
- return['Odds only','--mu','No recent form data — fair % is the book price with estimated margin removed']}
+function dataConf(l){if(l.home_form&&l.away_form){const n=(l._criteria||[]).filter(c=>c.kind!=='other').length;return['Form available','--g',`Form loaded${l._src?' ('+l._src+')':''} · ${(l._form_support||[]).length} backed · ${(l._form_flags||[]).length} disagreed`+(n?` · ${n} criteria classified`:'')]}
+ if(l.home_form||l.away_form)return['Partial form','--y','Only one side matched in '+(l._src||'the data source')];
+ if(l._form_lookup==='failed')return['Odds only','--y','Teams not found in ESPN or Football-Data data'];return['Odds only','--mu','No recent match data found']}
 const formLine=(n,f)=>`${esc(n)}: form <b>${esc(f.form)}</b> (${f.played} matches) • scored ${f.avg_scored.toFixed(1)} • conceded ${f.avg_conceded.toFixed(1)} • BTTS ${f.btts_pct.toFixed(0)}% • O2.5 ${f.over25_pct.toFixed(0)}%`;
 function exHtml(l,i){if(l.is_bab&&!l.home_form)return '';const[h,a]=teamsOf(l.match);
  if(l._exStatus==='nokey')return i===lastLegs.findIndex(x=>x._exStatus==='nokey')?'<div class="ex muted">📊 Form, league position &amp; head-to-head: add your free Football-Data key in <b>About → Settings</b>.</div>':'';
