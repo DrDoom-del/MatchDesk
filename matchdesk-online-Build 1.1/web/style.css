@@ -58,10 +58,14 @@ input.nm{width:100%;font-weight:700;background:transparent;border:1px dashed tra
 input.nm:focus,input.nm:hover{border-color:var(--ac)}
 
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0;max-height:150px;overflow:auto}
-.chip{padding:6px 10px;border-radius:16px;background:var(--panel);font-weight:500;font-size:13px;cursor:pointer}
-.chip.on{background:var(--ac);color:var(--on-ac)}
-.chip.add{background:var(--card)}
+.chip{padding:6px 10px;border-radius:16px;background:var(--panel);color:var(--fg);border:1px solid #2a3d55;font-weight:500;font-size:13px;cursor:pointer}
+.chip:hover{border-color:var(--ac);color:var(--fg);background:#152235}
+.chip.on{background:var(--ac);color:var(--on-ac);border-color:var(--ac)}
+.chip.add{background:var(--card);color:var(--fg);border-color:#2a3d55}
 #chips{max-height:none}
+/* Inline action chips (e.g. “show all matches in …”) inside cards/muted text */
+.card .chip,#browsebtn{color:var(--fg);background:var(--panel);border:1px solid #2a3d55}
+.card .chip:hover,#browsebtn:hover{border-color:var(--ac);background:#152235}
 details summary{cursor:pointer}
 
 .cols{display:grid;grid-template-columns:1fr;gap:14px}
