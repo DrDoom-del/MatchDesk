@@ -65,8 +65,8 @@ function addSlipTeams(legs){const names=[...new Set((legs||[]).flatMap(l=>teamsO
 $('#fromslip').onclick=()=>{const r=addSlipTeams(lastLegs);$('#status').textContent=r?`Added ${r[0]} of ${r[1]} team(s) from your slip. They are looked up in the major leagues and cups; for a team in another league, open that league and tap the team.`:'No teams found – analyze a slip first.';loadScores()};
 $('#scodebtn').onclick=async()=>{const raw=$('#scode').value.trim(),st=$('#scst');if(!raw){st.textContent='Type or paste a booking code, Bet ID or link first.';return}
  let text=raw;if(!looksLikeSlip(raw)){st.textContent='Loading the slip from the bookmaker…';const hr=await helperResolve(raw,'Auto',st);
-  if(!hr){st.textContent='Loading a code needs the MatchDesk server (or the local helper). You can paste the slip text here instead.';return}
-  if(!hr.ok){st.textContent=hr.message||'Could not load that code.';return}text=hr.text}
+  if(!hr){st.innerHTML='Loading a code needs the MatchDesk server (or the local helper). You can paste the slip text here instead. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
+  if(!hr.ok){st.innerHTML=esc(diagnoseCodeError(hr.message||'Could not load that code.',raw,'Auto'))+' '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}text=hr.text}
  const r=addSlipTeams(parse(text));st.textContent=r?`Added ${r[0]} of ${r[1]} team(s) from that slip to your tracking.`:'No teams found in that slip.';loadScores()};
 function clearTracking(){const n=tracked().length;browse=false;try{localStorage.removeItem('md_tracked')}catch{}setTracked([]);lastList=[];Object.keys(lastScores).forEach(k=>delete lastScores[k]);
  $('#matches').innerHTML='';$('#status').textContent='';try{drawVideo()}catch{}toast(n?`Cleared ${n} tracked item(s)`:'Nothing was being tracked');loadScores()}
@@ -570,7 +570,7 @@ function renderLegs(){
 }
 $('#analyze').onclick=()=>{
  lastTarget=parseFloat($('#target').value)||5;lastText=$('#slip').value;
- if(lastText.trim()&&!canAnalyze(lastText)){$('#rempty').hidden=true;$('#legs').innerHTML=`<div class="card limit-card"><b>Daily free limit reached</b>${(()=>{try{const e=licStatus().ended;return e==='license'?'<p class="muted" style="margin:4px 0"><b>Your Pro licence has expired.</b></p>':e==='trial'?'<p class="muted" style="margin:4px 0"><b>Your 7-day free trial has ended.</b></p>':''}catch{return''}})()}<p class="muted">The Free plan includes <b>${FREE_ANALYSES_PER_DAY} analysis per day</b>. Re-running the same slip still works. Pro unlocks unlimited analyses, advanced stake tools and unlimited history.</p><div class="row"><button data-go="about" data-plans="1" id="golimit">See plans &amp; unlock Pro</button></div><p class="muted" style="margin-top:8px;font-size:12px">Tracked teams, live scores and your history stay available on Free.</p></div>`;$('#combos').innerHTML='';$('#ctl').hidden=true;try{drawPlanBar()}catch{}return}
+ if(lastText.trim()&&!canAnalyze(lastText)){$('#rempty').hidden=true;$('#legs').innerHTML=`<div class="card limit-card"><b>Daily free limit reached</b>${(()=>{try{const e=licStatus().ended;return e==='license'?'<p class="muted" style="margin:4px 0"><b>Your Pro licence has expired.</b></p>':e==='trial'?'<p class="muted" style="margin:4px 0"><b>Your 7-day free trial has ended.</b></p>':''}catch{return''}})()}<p class="muted">The Free plan includes <b>${FREE_ANALYSES_PER_DAY} analysis per day</b>. Re-running the same slip still works. Pro unlocks unlimited analyses, advanced stake tools and unlimited history. Resets at midnight local time.</p><div class="row"><button data-go="about" data-plans="1" id="golimit">See plans &amp; unlock Pro</button>${helpNeedBtn('daily free limit reached','Need help?')}</div><p class="muted" style="margin-top:8px;font-size:12px">Tracked teams, live scores and your history stay available on Free.</p></div>`;$('#combos').innerHTML='';$('#ctl').hidden=true;try{drawPlanBar()}catch{};setTimeout(()=>helpWireNeed($('#legs')),0);return}
 if(lastText.trim())try{store.set('last_slip',lastText)}catch{}
 lastLegs=parse(lastText);lastLegs.forEach(l=>{l._criteria=l.is_bab?(l.sub_legs||[]).map(parseCrit):[parseCrit(`${l.market}: ${l.sel}`)]});
  $('#rempty').hidden=true;$('#clear2').hidden=false;renderLegs();lastCombos=combos(lastLegs,lastTarget);shown=PAGE;
@@ -744,26 +744,38 @@ const looksLikeSlip=t=>t.includes('\n')&&(t.match(/(?<!\d)\d{1,3}[.,]\d{2}(?!\d)
 const HELPER='http://127.0.0.1:8765',BASES=['/api',HELPER+'/api'];
 async function findBase(){for(const b of BASES){try{const c=new AbortController(),t=setTimeout(()=>c.abort(),1500);
   const r=await fetch(b+'/ping',{signal:c.signal});clearTimeout(t);if(r.ok){const j=await r.json();if(j&&j.ok)return[b,j]}}catch{}}return null}
+function diagnoseCodeError(msg,code,bookie){
+ const m=(msg||'').toLowerCase(),bk=(bookie||'').toLowerCase(),raw=(code||'');
+ if(/abort|timeout|did not answer|network|failed to fetch|load failed/i.test(m))return 'Timed out or the server did not respond. Check your connection and try again. Bookmaker sites are sometimes slow or block cloud servers.';
+ if(/block|forbidden|403|cloud|datacenter|data.?centre|captcha/i.test(m))return 'The bookmaker may be blocking server requests (common from cloud hosts). Open the bookmaker page yourself, copy the slip text, and use Paste from Clipboard.';
+ if(/10bet/i.test(bk)||/10bet/i.test(raw))return '10Bet has no public booking-code page. Copy the slip text from the 10Bet site or app and press Paste & Analyze.';
+ if(/sportingbet/i.test(bk)||/sportingbet/i.test(raw))return 'Sportingbet needs the full Share My Bet link, not a short code. Paste the full link, or copy the slip text and press Paste & Analyze.';
+ if(/not found|404|unknown|invalid code|no slip/i.test(m))return 'That code was not found or is not supported. Confirm the code is still valid on the bookmaker site, or paste the slip text instead.';
+ if(/unsupported|not supported/i.test(m))return 'That bookmaker is not supported for automatic code loading. Paste the slip text or open the bookmaker page and copy it.';
+ return msg||'Could not load that code.';
+}
 async function helperResolve(code,bookie,st){
  const f=await findBase();if(!f)return null;
  st.textContent='Loading the slip from the bookmaker… this can take up to a minute.';
  try{const c=new AbortController(),t=setTimeout(()=>c.abort(),120000);
   const r=await fetch(`${f[0]}/resolve?code=${encodeURIComponent(code)}&bookie=${encodeURIComponent(bookie)}`,{signal:c.signal});clearTimeout(t);return await r.json()}
- catch(e){return{ok:false,message:'The server did not answer ('+e.name+').'}}}
+ catch(e){const name=e&&e.name||'Error';return{ok:false,message:name==='AbortError'?'Timed out waiting for the bookmaker (over 2 minutes). Try again or paste the slip text.':'The server did not answer ('+name+').'}}}
 async function bookingOpen(){
  const raw=$('#bcode').value.trim(),st=$('#bst');if(!raw){st.textContent='Type or paste a booking code, Bet ID or share link first.';return}
  if(looksLikeSlip(raw)){$('#slip').value=raw;$('#bcode').value='';st.textContent='That looks like a full slip, so I analyzed it directly.';$('#analyze').click();return}
  const hr=await helperResolve(raw,$('#bsite').value,st);
  if(hr){if(hr.ok&&hr.text){$('#slip').value=hr.text;st.textContent=(hr.message||'Loaded.')+' Analyzed on the right.';$('#analyze').click();
   if(!lastLegs.length)st.innerHTML=`The slip loaded, but I could not read any legs from it. This is what came back:<pre class="raw">${esc(hr.text.slice(0,600))}</pre>Copy this text to me and I will fix the reader.`;return}
-  st.innerHTML='The helper could not load it: '+esc(hr.message||'unknown reason')+'<br>I will open the page so you can copy the slip instead.'}
+  const diag=diagnoseCodeError(hr.message,raw,$('#bsite').value);
+  st.innerHTML=`<b>Could not load automatically</b><br>${esc(diag)}<br><span class="muted">I will try to open the bookmaker page so you can copy the slip instead.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
+  helpWireNeed(st)}
  const sel=$('#bsite').value;let[code,bk]=extractCode(raw,sel);if(sel!=='Auto')bk=sel;if(bk==='Auto'||!bk)bk=/^BW/i.test(code)?'Betway':'Auto';
  let urls=/^https?:\/\//i.test(raw)?[raw.match(/https?:\/\/\S+/)[0]]:(SITE[bk]?SITE[bk](code):[]);
- if(bk==='10Bet'){st.textContent='10Bet has no public booking-code page. Copy the slip text from the 10Bet site or app and press Paste & Analyze.';return}
- if(bk==='Sportingbet'&&!urls.length){st.textContent='Sportingbet uses a Share My Bet link, not a short code. Paste the full link here, or copy the slip text and press Paste & Analyze.';return}
- if(!urls.length){st.textContent='I could not tell which bookmaker that code is from. Pick one from the list.';return}
+ if(bk==='10Bet'){st.innerHTML='10Bet has no public booking-code page. Copy the slip text from the 10Bet site or app and press Paste & Analyze. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
+ if(bk==='Sportingbet'&&!urls.length){st.innerHTML='Sportingbet uses a Share My Bet link, not a short code. Paste the full link here, or copy the slip text and press Paste & Analyze. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
+ if(!urls.length){st.innerHTML='I could not tell which bookmaker that code is from. Pick one from the list, or paste the slip text instead. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
  window.open(urls[0],'_blank','noopener');
- st.innerHTML=(st.innerHTML.includes('helper could not')?st.innerHTML+'<br>':'')+`Code <b>${esc(code)}</b> (${esc(bk)}) opened in a new tab. There, select the slip (Ctrl+A), copy it (Ctrl+C), come back and press <b>Paste from Clipboard</b>.${urls[1]?` <a href="${esc(urls[1])}" target="_blank" rel="noopener">Alternative page</a>`:''}`}
+ st.innerHTML=(st.innerHTML.includes('Could not load automatically')?st.innerHTML+'<br>':'')+`Code <b>${esc(code)}</b> (${esc(bk)}) opened in a new tab. There, select the slip (Ctrl+A), copy it (Ctrl+C), come back and press <b>Paste from Clipboard</b>.${urls[1]?` <a href="${esc(urls[1])}" target="_blank" rel="noopener">Alternative page</a>`:''}`}
 async function pasteClipboard(){const st=$('#bst');
  const putText=t=>{t=(t||'').trim();
   if(!t){st.textContent='The clipboard is empty. Copy a slip, a booking code or a screenshot first.';return}
@@ -1009,6 +1021,10 @@ async function loadBranding(){
 
 // ---------- plans & pricing (ported from the desktop app: USD base, local-currency estimate, PayPal checkout) ----------
 const PRICE_USD={monthly:4.99,annual:49.99},SAVING_USD=Math.round((12*4.99-49.99)*100)/100,FREE_ANALYSES_PER_DAY=1,FREE_SAVED_SLIPS=5,SUPPORT='Matchdesksupport@gmail.com';
+const PF_CFG=()=>(window.MD_CONFIG&&MD_CONFIG.payfast)||{};
+const PRICE_ZAR_DEFAULT={monthly:91.99,annual:829.00};
+const zarOf=k=>{const v=Number((PF_CFG().prices||{})[k]);return Number.isFinite(v)&&v>0?v:PRICE_ZAR_DEFAULT[k]};
+const fmtZar=n=>'R'+Number(n).toFixed(2);
 const PAYPAL={monthly:'https://www.paypal.com/ncp/payment/G3JDJVPJ7UP6Y',annual:'https://www.paypal.com/ncp/payment/3VD4WJ5JWQXN6'};
 const TZ_COUNTRY={'Africa/Johannesburg':'ZA','Africa/Lagos':'NG','Africa/Nairobi':'KE','Africa/Accra':'GH','Africa/Cairo':'EG','Europe/London':'GB','Europe/Dublin':'IE','Europe/Berlin':'DE','Europe/Paris':'FR','Europe/Madrid':'ES','Europe/Rome':'IT','Europe/Amsterdam':'NL','America/New_York':'US','America/Chicago':'US','America/Denver':'US','America/Los_Angeles':'US','America/Toronto':'CA','America/Sao_Paulo':'BR','America/Mexico_City':'MX','Australia/Sydney':'AU','Australia/Melbourne':'AU','Pacific/Auckland':'NZ','Asia/Kolkata':'IN','Asia/Tokyo':'JP','Asia/Dubai':'AE','Asia/Singapore':'SG','Africa/Gaborone':'BW','Africa/Windhoek':'NA','Africa/Lusaka':'ZM','Africa/Maputo':'MZ','Africa/Dar_es_Salaam':'TZ','Africa/Kampala':'UG','Africa/Maseru':'LS','Africa/Mbabane':'SZ','Africa/Casablanca':'MA','Africa/Addis_Ababa':'ET','Europe/Lisbon':'PT','Europe/Brussels':'BE','Europe/Vienna':'AT','Europe/Zurich':'CH','Europe/Stockholm':'SE','Europe/Oslo':'NO','Europe/Copenhagen':'DK','Europe/Warsaw':'PL','Europe/Prague':'CZ','Europe/Budapest':'HU','Europe/Bucharest':'RO','Europe/Athens':'GR','Europe/Helsinki':'FI','Europe/Istanbul':'TR','Asia/Istanbul':'TR','Europe/Kyiv':'UA','Europe/Kiev':'UA','America/Vancouver':'CA','America/Edmonton':'CA','America/Winnipeg':'CA','America/Halifax':'CA','America/Phoenix':'US','America/Anchorage':'US','Pacific/Honolulu':'US','America/Argentina/Buenos_Aires':'AR','America/Buenos_Aires':'AR','America/Santiago':'CL','America/Bogota':'CO','America/Lima':'PE','Australia/Brisbane':'AU','Australia/Perth':'AU','Australia/Adelaide':'AU','Australia/Hobart':'AU','Australia/Darwin':'AU','Asia/Calcutta':'IN','Asia/Karachi':'PK','Asia/Dhaka':'BD','Asia/Manila':'PH','Asia/Jakarta':'ID','Asia/Bangkok':'TH','Asia/Kuala_Lumpur':'MY','Asia/Shanghai':'CN','Asia/Seoul':'KR','Asia/Riyadh':'SA','Asia/Jerusalem':'IL'};
 function deviceCountry(){
@@ -1026,32 +1042,58 @@ async function loadRates(){const c=cacheGet('fx',12*36e5);if(c){fxRates=c;return
 const grp=(x,d)=>Number(x.toFixed(d)).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
 function fmtLocal(usd){const cc=deviceCountry(),[code,sym]=CURRENCY_BY_COUNTRY[cc]||[null,null],rate=code&&fxRates[code];
  if(!rate)return `$${grp(usd,2)} USD`;return sym+grp(usd*rate,['JPY','KRW'].includes(code)?0:2)}
+function startPayFast(plan){
+ const pf=PF_CFG(),amt=fmtZar(zarOf(plan)),label=plan==='annual'?'1 Year Access':'30 Day Access';
+ openLegal('Pay with PayFast',`<p><b>${label}</b> &middot; <b>${amt}</b> (South African rand)</p>
+  <p class="muted">Enter the email address where we should send your licence key.</p>
+  <input id="pf-email" class="pf-input" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com">
+  <div class="row" style="margin-top:10px"><button type="button" id="pf-go">Continue to PayFast</button></div>
+  <p id="pf-msg" class="muted" style="margin-top:8px"></p>
+  <p class="muted" style="font-size:12px">By continuing you agree to our Terms of Service, Privacy Policy and Refund Policy. 7-day money-back guarantee.</p>`);
+ const go=document.getElementById('pf-go'),msg=document.getElementById('pf-msg'),inp=document.getElementById('pf-email');
+ if(!go)return;
+ go.onclick=()=>{const em=(inp.value||'').trim();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(em)){msg.textContent='Please enter a valid email address.';msg.style.color='var(--o)';return}
+  if(!pf.checkoutUrl){msg.style.color='';msg.innerHTML='<b>Preview only:</b> PayFast is not connected yet, so no payment was started. When it is connected you will be taken to PayFast to pay '+amt+'.';return}
+  window.open(pf.checkoutUrl+(pf.checkoutUrl.includes('?')?'&':'?')+'plan='+encodeURIComponent(plan)+'&email='+encodeURIComponent(em),'_blank','noopener')}
+}
 async function drawPlans(){await loadRates();const F=fmtLocal,cc=deviceCountry(),[code]=CURRENCY_BY_COUNTRY[cc]||[null];
  let region='';try{region=cc?new Intl.DisplayNames(['en'],{type:'region'}).of(cc):''}catch{region=cc||''}
  const st=(()=>{try{return licStatus().state}catch{return 'free'}})();
+ const pfCan=!!(PF_CFG().checkoutUrl||PF_CFG().preview),pfShown=pfCan&&(cc==='ZA'||store.get('pf_show',0)==1),pfPreview=pfShown&&!PF_CFG().checkoutUrl;
+ const hint=document.getElementById('plans-hint');if(hint)hint.hidden=pfShown;
  const openPay=k=>{const u=PAYPAL[k];if(u)window.open(u,'_blank','noopener');else alert('PayPal link not configured yet. Email '+SUPPORT)};
  const card=(key,name,price,period,tag,blurb,feats,cls)=>{
   const isCur=(key==='free'&&st==='free')||(key!=='free'&&st==='licensed');
-  const paid=key==='monthly'||key==='annual';
+  const paid=key==='monthly'||key==='annual',pfm=pfShown&&paid;
   const cta=isCur?'● Your current plan':(paid?'Click / tap to continue to PayPal →':' ');
-  return `<div class="plan-card ${cls||key}${isCur?' current':''}${paid?' paid':''}" ${paid?`data-plan="${key}" role="button" tabindex="0"`:''}>
+  let ppSub='';if(pfm){const ppEst=F(PRICE_USD[key]);ppSub=ppEst.startsWith('$')?`$${PRICE_USD[key]} USD`:`$${PRICE_USD[key]} USD · ≈ ${ppEst}`}
+  const pay=pfm?`<div class="pay-opts">${isCur?'<div class="cta">● Your current plan</div>':''}<button type="button" class="pay-btn" data-pf="${key}">Pay with PayFast<small>${fmtZar(zarOf(key))} · cards &amp; Instant EFT</small></button><button type="button" class="pay-btn ghost" data-pp="${key}">Pay with PayPal<small>${ppSub}</small></button></div>`:'';
+  return `<div class="plan-card ${cls||key}${isCur?' current':''}${paid&&!pfm?' paid':''}${pfm?' pf':''}" ${paid&&!pfm?`data-plan="${key}" role="button" tabindex="0"`:''}>
    <span class="tag-line">${esc(tag)}</span>
    <h4>${esc(name)}</h4>
    <div class="price">${esc(price)}</div>
    <div class="period">${esc(period||'forever')}</div>
    <div class="muted" style="font-size:12px">${esc(blurb)}</div>
    <ul>${feats.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>
-   ${paid?`<div class="muted" style="font-size:11px">PayPal price: $${PRICE_USD[key]} USD</div>`:''}
-   <div class="cta">${cta}</div>
+   ${paid&&!pfm?`<div class="muted" style="font-size:11px">PayPal price: $${PRICE_USD[key]} USD</div>`:''}
+   ${pfm?pay:`<div class="cta">${cta}</div>`}
   </div>`};
- $('#plans').innerHTML=`<p class="muted">${(region&&code&&code!=='USD'&&fxRates[code])?`Prices shown for ${esc(region)} (${code}). Estimates converted from USD; `:(code==='USD'?'Prices shown in US dollars (USD). ':'Prices shown in US dollars (USD) — a local-currency estimate is not available right now. ')}PayPal checkout is authoritative for the amount charged. After a successful payment the licence key is emailed to the PayPal account address.</p>
+ const introOrig=`${(region&&code&&code!=='USD'&&fxRates[code])?`Prices shown for ${esc(region)} (${code}). Estimates converted from USD; `:(code==='USD'?'Prices shown in US dollars (USD). ':'Prices shown in US dollars (USD) — a local-currency estimate is not available right now. ')}PayPal checkout is authoritative for the amount charged. After a successful payment the licence key is emailed to the PayPal account address.`;
+ const introPF=`Prices shown in South African rand (ZAR). <b>PayFast</b> charges the rand price shown. <b>PayPal</b> charges in US dollars ($${PRICE_USD.monthly} / $${PRICE_USD.annual}) and converts at its own rate. After a successful payment your licence key is emailed: with PayFast to the email address you enter, with PayPal to your PayPal account address.`;
+ $('#plans').innerHTML=`<p class="muted">${pfShown?introPF:introOrig}</p>
+  ${pfPreview?'<div class="pf-preview"><b>PREVIEW:</b> PayFast is not connected yet. These buttons are for evaluation only and do not take payment.</div>':''}
+  ${pfCan&&!pfShown?'<p class="muted" style="font-size:12px"><a href="#" id="pf-reveal" style="color:var(--ac)">Paying from South Africa? Show PayFast (rand) options</a></p>':''}
   <p class="muted" style="font-size:12px">By purchasing you agree to our <a href="#" id="plans-terms" style="color:var(--ac)">Terms of Service</a>, <a href="#" id="plans-privacy" style="color:var(--ac)">Privacy Policy</a> and <a href="#" id="plans-refunds" style="color:var(--ac)">Refund Policy</a>. <b>7-day money-back guarantee.</b></p>
  <div class="plans-grid">`
   +card('free','Free Forever','Free','','FREE FOREVER','For new users and casual bettors',['Basic live scores',`${FREE_ANALYSES_PER_DAY} bet-slip analysis per day`,'Basic odds & return calculations','Basic match information',`Save up to ${FREE_SAVED_SLIPS} slips`],'free')
-  +card('monthly','PayPal 30 Day Access',F(PRICE_USD.monthly),'30 day access','RECOMMENDED','For regular bettors who want the full toolkit',['Everything in Free','Unlimited bet-slip analyses','Advanced stake tools (Kelly sizing)','Unlimited saved slips & results history','No auto-renewal'],'monthly')
-  +card('annual','MatchDesk 1 Year Access',F(PRICE_USD.annual),'1 year access','SAVE '+F(SAVING_USD),'Same Pro features, one upfront payment',['All Pro features','One upfront annual payment',`About ${F(PRICE_USD.annual/12)}/month`,'Best value for committed users'],'annual')
+  +card('monthly',pfShown?'30 Day Access':'PayPal 30 Day Access',pfShown?fmtZar(zarOf('monthly')):F(PRICE_USD.monthly),'30 day access','RECOMMENDED','For regular bettors who want the full toolkit',['Everything in Free','Unlimited bet-slip analyses','Advanced stake tools (Kelly sizing)','Unlimited saved slips & results history','No auto-renewal'],'monthly')
+  +card('annual','MatchDesk 1 Year Access',pfShown?fmtZar(zarOf('annual')):F(PRICE_USD.annual),'1 year access','SAVE '+(pfShown?fmtZar(Math.max(0,12*zarOf('monthly')-zarOf('annual'))):F(SAVING_USD)),'Same Pro features, one upfront payment',['All Pro features','One upfront annual payment',`About ${pfShown?fmtZar(zarOf('annual')/12):F(PRICE_USD.annual/12)}/month`,'Best value for committed users'],'annual')
   +`</div>
   <p class="muted" style="font-size:12px">Keys do not renew automatically. Without one, MatchDesk keeps working on the Free plan. New installs may include a ${TRIAL_DAYS||7}-day Pro trial. Support: ${SUPPORT}</p>`;
+ document.querySelectorAll('[data-pf]').forEach(b=>{b.onclick=e=>{e.preventDefault();startPayFast(b.dataset.pf)}});
+ document.querySelectorAll('[data-pp]').forEach(b=>{b.onclick=e=>{e.preventDefault();openPay(b.dataset.pp)}});
+ const rv=document.getElementById('pf-reveal');if(rv)rv.onclick=e=>{e.preventDefault();store.set('pf_show',1);drawPlans()};
  document.querySelectorAll('.plan-card.paid').forEach(el=>{
   const go=()=>openPay(el.dataset.plan);
   el.onclick=go;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();go()}};
@@ -1092,7 +1134,15 @@ function licStatus(){const today=localISO(),lic=store.get('license',null);let no
  if(expM)return{state:'free',ended:'license',expiredOn:expM[1],headline:'Licence expired on '+expM[1],detail:`Your Pro licence expired on ${expM[1]}, so MatchDesk is now on the Free plan (${FREE_ANALYSES_PER_DAY} bet-slip analysis per day). Enter a new license key to unlock Pro again.`};
  return{state:'free',ended:'trial',headline:'Free trial ended',detail:(note?note+' ':'')+`Your ${TRIAL_DAYS}-day Pro trial has ended, so MatchDesk is now on the Free plan (${FREE_ANALYSES_PER_DAY} bet-slip analysis per day and ${FREE_SAVED_SLIPS} saved slips). Enter a license key to unlock Pro.`}}
 const isPro=()=>{try{const t=licStatus().state;return t==='licensed'||t==='trial'}catch{return true}};
-function drawLicense(){const st=licStatus();$('#lichead').textContent=({licensed:'✅ ',trial:'🎁 ',free:'🆓 '})[st.state]+st.headline;$('#licdetail').textContent=st.detail;$('#licremove').hidden=st.state!=='licensed';$('#lickey').closest('.row').hidden=st.state==='licensed'}
+function drawLicense(){const st=licStatus();$('#lichead').textContent=({licensed:'✅ ',trial:'🎁 ',free:'🆓 '})[st.state]+st.headline;$('#licdetail').textContent=st.detail;$('#licremove').hidden=st.state!=='licensed';$('#lickey').closest('.row').hidden=st.state==='licensed';
+ const chk=$('#paypal-checklist');
+ if(chk){chk.hidden=st.state==='licensed'}
+ // Contextual help on trial ended / licence expired
+ const need=$('#lic-need-help');
+ if(need){
+  if(st.state==='free'&&(st.ended==='trial'||st.ended==='license')){need.hidden=false;need.dataset.helpTopic=st.ended==='trial'?'what happens when my trial ends':'licence expired';need.textContent=st.ended==='trial'?'Need help with trial ending?':'Need help with an expired key?';helpWireNeed(need.parentElement||need)}
+  else need.hidden=true
+ }}
 $('#licact').onclick=()=>{const m=$('#licmsg'),k=$('#lickey').value;const[ok,info]=checkKey(k,localISO());
  if(!ok){m.className='flag';m.textContent=info;return}store.set('license',{key:k.trim(),activated_at:new Date().toISOString()});$('#lickey').value='';m.className='ok';m.textContent='MatchDesk Pro activated. Thank you!';drawLicense();try{drawDash()}catch{}try{drawPlans()}catch{}toast('MatchDesk Pro activated')};
 $('#licpaste').onclick=async()=>{try{const t=await navigator.clipboard.readText();if(!t.trim())throw 0;$('#lickey').value=t.trim();$('#licmsg').className='muted';$('#licmsg').textContent='Key pasted – press Activate.'}catch{$('#lickey').focus();$('#licmsg').className='muted';$('#licmsg').textContent='Press Ctrl+V (or long-press and Paste) in the box.'}};
@@ -1393,6 +1443,265 @@ function tourShow(i){
  },140);
 }
 $('#tour-btn').onclick=()=>tourShow(0);
+
+// ---------- built-in Help assistant (offline FAQ chatbot) ----------
+const HELP_SUPPORT='Matchdesksupport@gmail.com';
+const HELP_SUGGEST=[
+  'How do I activate my key?',
+  'Why won’t my booking code load?',
+  'What happens when my trial ends?',
+  'How do I pay with PayPal?',
+  'What is the Free plan limit?',
+  'How do goal alerts work?',
+  'Where is form & H2H data from?',
+  'How do I get a refund?',
+  'Responsible gambling'
+];
+// Each entry: q = phrases, a = answer, go = optional deep-link actions [{label, tab, scroll?, tour?}]
+const HELP_QA=[
+  {q:['activate key','enter key','licence key','license key','how do i activate','put in my key','use my key','paste key','md1 key'],
+   a:'Open the About tab → Licence & Plans. Paste or type your key (it usually starts with MD…) and tap Activate. Keys are emailed after a successful PayPal payment. Your key stays on this device only.',
+   go:[{label:'Open Licence & Plans',tab:'about',scroll:'plans-h'}]},
+  {q:['trial ends','trial end','when trial','what happens when my trial','after trial','trial over','free trial ends','trial finished'],
+   a:'New installs can include a 7-day Pro trial with full access. When it ends, MatchDesk continues on the Free plan: 1 bet-slip analysis per day and up to 5 saved slips. Tracked teams, live scores and history remain available. You can unlock Pro anytime from About → Plans.',
+   go:[{label:'See plans',tab:'about',scroll:'plans-h'}]},
+  {q:['free plan','daily limit','analysis limit','how many analysis','free limit','1 analysis','one analysis','limit reached','daily free'],
+   a:'The Free plan allows 1 new bet-slip analysis per day and up to 5 saved slips. Re-analysing the same slip still works. Live scores, tracking and basic tools stay available. Pro removes these limits.',
+   go:[{label:'See plans',tab:'about',scroll:'plans-h'}]},
+  {q:['booking code','load code','code won\'t load','code will not load','code not loading','why won\'t my booking','load & track','scode','bet id not loading','code fails','code failed','booking id'],
+   a:'Paste a booking code, Bet ID or share link in Live Scores → “Load & track” or in the Analyzer, then tap Load code. It needs the server (or local helper) and a working connection.\n\nCommon reasons it fails:\n• Bookmaker blocks cloud servers\n• 10Bet has no public code page — paste the slip text instead\n• Sportingbet needs the full Share My Bet link\n• Timeout or temporary site change\n\nIf it fails, open the bookmaker page yourself or email support with the bookmaker name and a screenshot.',
+   go:[{label:'Open Analyzer',tab:'analyzer'},{label:'Open Live Scores',tab:'scores'}]},
+  {q:['payfast','pay with payfast','rand','zar payment','south africa pay'],
+   a:'PayFast (rand / Instant EFT) is not available yet. For now please use PayPal from About → Plans. After payment your licence key is emailed to your PayPal account address. PayFast will be added when it is connected.',
+   go:[{label:'Open Plans',tab:'about',scroll:'plans-h'}]},
+  {q:['paypal','pay with paypal','how to pay','buy pro','purchase','checkout','payment'],
+   a:'Open About → Plans & Pricing and tap a paid plan to open PayPal checkout. PayPal charges in USD ($4.99 for 30 days / $49.99 for 1 year) and converts at its own rate.\n\nAfter you pay:\n1. Check the email on your PayPal account for the licence key\n2. Paste the key in About → Licence & Plans\n3. Tap Activate — you are on Pro',
+   go:[{label:'Open Plans',tab:'about',scroll:'plans-h'}]},
+  {q:['refund','money back','cancel payment','7-day','money-back'],
+   a:'There is a 7-day money-back guarantee. Email Matchdesksupport@gmail.com from your PayPal account email. Include the payment date and approximate amount. Full details are in About → Refund Policy.',
+   go:[{label:'Refund Policy',tab:'about',legal:'refunds'}]},
+  {q:['goal alert','push notification','alerts','notification','sound when score','push not working'],
+   a:'In About → Goal alerts you can turn on:\n• Sound & vibration when a score changes\n• Pop-up notifications while the app is open\n• Push notifications (alerts even when the app is closed)\nTrack teams or leagues first on the Live Scores tab. Push needs a secure (HTTPS) address and permission from the browser.',
+   go:[{label:'Open Goal alerts',tab:'about',scroll:'alpush'},{label:'Open Live Scores',tab:'scores'}]},
+  {q:['form data','h2h','head to head','league position','football-data','where does data','espn data','data sources'],
+   a:'Form, league position and head-to-head come from ESPN by default (no key needed). Optionally add a free Football-Data.org key in About → Settings; then Football-Data is tried first for major European leagues and ESPN covers everything else. Keys stay only on this device.',
+   go:[{label:'Open Settings',tab:'about',scroll:'fdkey'}]},
+  {q:['ai commentary','groq','gemini','ai key'],
+   a:'Optional. In About → Settings you can add a Groq key (primary, fast) and/or Google Gemini key (fallback). When set, recommended combinations can show AI commentary. AI text is an automated estimate only and is not betting advice. Keys stay on this device.',
+   go:[{label:'Open Settings',tab:'about',scroll:'groqkey'}]},
+  {q:['install app','add to home','pwa','home screen'],
+   a:'On supported phones, open the app in the browser and use “Install app” / “Add to Home Screen” (or the Install card on the Home tab). This gives one-tap access, a fuller-screen experience and better support for push alerts.',
+   go:[{label:'Go Home',tab:'dash'}]},
+  {q:['offline','no internet','works offline'],
+   a:'The app caches recent data. You can still open it and view last-saved slips, history and settings while offline. Live scores and loading booking codes need a connection. A yellow bar appears when you are offline. Help answers also work offline.'},
+  {q:['track team','add team','track league','from slip'],
+   a:'On Live Scores: search or type a team and tap Track, or use “Track whole league”. You can also load a booking code and track those teams, or use “＋ Add teams from analyzed slip” after running the Analyzer.',
+   go:[{label:'Open Live Scores',tab:'scores'}]},
+  {q:['history','saved slips','hit rate'],
+   a:'Analyses you save appear in the History tab. Mark them Won or Lost to build your personal hit-rate (shown on Home). Free plan keeps up to 5 saved slips; Pro has unlimited history.',
+   go:[{label:'Open History',tab:'history'}]},
+  {q:['video','live stream','watch match'],
+   a:'The Video tab lists official / legal broadcasters and stream sources only. MatchDesk does not host or pirate streams.',
+   go:[{label:'Open Video',tab:'video'}]},
+  {q:['currency','price in rand','local price','exchange rate'],
+   a:'Plan prices are based on USD ($4.99 / $49.99). The app shows an estimate in your local currency (from device region/timezone and live rates). PayPal charges in USD. Local-currency figures shown in the app are estimates only.'},
+  {q:['key not working','invalid key','licence expired','license expired','key expired'],
+   a:'Check you pasted the full key with no extra spaces. Keys are tied to the same public key as the desktop app. If a licence has an expiry date and that date has passed, you return to the Free plan — enter a new key or renew from About → Plans. Contact support if a freshly emailed key fails.',
+   go:[{label:'Open Licence',tab:'about',scroll:'plans-h'}]},
+  {q:['contact support','email support','help email','customer service'],
+   a:'Email Matchdesksupport@gmail.com. For payment issues, write from your PayPal account email and include the date and amount. For booking-code problems, include the bookmaker name and what you tried.'},
+  {q:['what is matchdesk','about the app','who made'],
+   a:'MatchDesk is a live-scores + bet-slip analyzer app by Tri-Star (Pty) Ltd. It runs on your device; slips and keys stay local. Live scores use ESPN; optional Football-Data, Groq and Gemini keys enhance form/H2H and AI commentary.'},
+  {q:['responsible gambling','gambling help','self exclude','addiction','problem gambling','gamble responsibly'],
+   a:'18+ only. Gamble responsibly. No outcome is guaranteed. MatchDesk is an informational tool — estimates, not advice.\n\nIf gambling is causing harm, stop and get help. Open Responsible Gambling in About for support lines (including South Africa: 0800 006 008).',
+   go:[{label:'Responsible Gambling',tab:'about',legal:'rg'}]},
+  {q:['terms','privacy','legal'],
+   a:'Terms of Service, Privacy Policy, Refund Policy and Responsible Gambling are available as buttons in the About tab. Tap any of them to read the full text in-app.',
+   go:[{label:'Open About',tab:'about'}]},
+  {q:['tour','how to use','getting started','first time'],
+   a:'Tap the 🧭 Tour button (bottom-right) for a short guided walkthrough of the main screens. You can also open this Help chat anytime.',
+   go:[{label:'Start Tour',tour:true}]},
+  {q:['clear data','reset','remove key','logout'],
+   a:'In About → Licence & Plans you can Remove key. Browser storage (keys, history, tracked teams) can be cleared from your browser/site settings. There is no cloud account to log out of — everything is device-local.',
+   go:[{label:'Open Licence',tab:'about',scroll:'plans-h'}]},
+  {q:['daily free limit reached','can\'t analyze','analysis blocked','cannot analyze'],
+   a:'On the Free plan you get 1 new analysis per day. The same slip can be re-run. Upgrade to Pro (About → Plans) for unlimited analyses, or wait until tomorrow (resets at midnight local time).',
+   go:[{label:'See plans',tab:'about',scroll:'plans-h'}]},
+  {q:['push not working','no push','test notification'],
+   a:'Push needs HTTPS (or localhost), browser permission, and the “Push notifications” toggle in About → Goal alerts. Use the “Send test notification” button if it appears. Some browsers or OS battery settings can block background push.',
+   go:[{label:'Open Goal alerts',tab:'about',scroll:'alpush'}]},
+  {q:['ocr','screenshot','import image','paste slip'],
+   a:'In the Analyzer you can paste text, paste from clipboard, or import a screenshot of a slip. The app tries to read the image on-device. Clear, high-contrast screenshots work best.',
+   go:[{label:'Open Analyzer',tab:'analyzer'}]},
+  {q:['risk rating','recommendation','how does analyzer work'],
+   a:'The Analyzer estimates probabilities from odds (with a bookmaker margin), optional form/H2H, and produces risk bands and combination suggestions. These are estimates only — not predictions or guarantees. Always bet responsibly.',
+   go:[{label:'Open Analyzer',tab:'analyzer'},{label:'Responsible Gambling',tab:'about',legal:'rg'}]},
+  {q:['plans','pricing','pro cost','how much'],
+   a:'Free Forever (1 analysis/day, 5 saved slips).\n30-day Pro ≈ $4.99 USD.\n1-year Pro ≈ $49.99 USD.\nKeys are emailed after PayPal payment and do not auto-renew. See About → Plans for the current local-currency estimate and checkout.',
+   go:[{label:'Open Plans',tab:'about',scroll:'plans-h'}]},
+  {q:['server','deploy','self host','docker'],
+   a:'This online build is meant to be hosted (Docker, Fly.io, Railway, etc.) so phones can open one link and load booking codes. For local testing use the start scripts or `python server.py`. See the project README for environment variables and notes about bookmaker blocking of cloud IPs.'}
+];
+
+const HELP_SYNONYMS=[
+  ['licence','license','licen'],
+  ['booking code','booking id','bet id','bet code','slip code','share link','share code'],
+  ['won\'t load','will not load','not loading','doesn\'t load','does not load','failed to load','can\'t load','cannot load','code fails'],
+  ['paypal','pay pal','payment','pay'],
+  ['trial','free trial','pro trial'],
+  ['alert','alerts','notification','notifications','push'],
+  ['refund','money back','chargeback'],
+  ['activate','activation','enter key','use key'],
+  ['gambling','gamble','addiction','problem gambling']
+];
+
+function helpNorm(s){
+  let t=(s||'').toLowerCase().replace(/[’‘]/g,"'").replace(/[^\w\s']/g,' ').replace(/\s+/g,' ').trim();
+  for(const group of HELP_SYNONYMS){
+    const canon=group[0];
+    for(const alt of group.slice(1)){
+      if(t.includes(alt)) t=t.split(alt).join(canon);
+    }
+  }
+  return t;
+}
+function helpScore(n, item){
+  let score=0;
+  for(const k of item.q){
+    const kn=helpNorm(k);
+    if(!kn)continue;
+    if(n===kn)score+=kn.length+20;
+    else if(n.includes(kn))score+=kn.length+12;
+    else if(kn.includes(n)&&n.length>=4)score+=n.length+6;
+    else{
+      const words=kn.split(' ').filter(w=>w.length>2);
+      const hits=words.filter(w=>n.includes(w)).length;
+      if(hits)score+=hits*4+(hits===words.length?8:0);
+    }
+  }
+  return score;
+}
+function helpMatch(text){
+  const n=helpNorm(text);if(!n||n.length<2)return null;
+  let best=null,bestScore=0,second=null,secondScore=0;
+  for(const item of HELP_QA){
+    const score=helpScore(n,item);
+    if(score>bestScore){second=best;secondScore=bestScore;best=item;bestScore=score}
+    else if(score>secondScore){second=item;secondScore=score}
+  }
+  if(bestScore>=8)return {item:best,score:bestScore,near:null};
+  if(bestScore>=4)return {item:null,score:bestScore,near:best}; // did you mean
+  return null;
+}
+function helpEmailLink(q){
+  const sub=encodeURIComponent('MatchDesk help');
+  const body=encodeURIComponent('Hi,\n\nI need help with:\n'+(q||'')+'\n\n(Please describe what you tried and any error messages.)\n');
+  return `mailto:${HELP_SUPPORT}?subject=${sub}&body=${body}`;
+}
+function helpRunGo(action){
+  if(!action)return;
+  if(action.tour){helpClose();setTimeout(()=>tourShow(0),120);return}
+  if(action.legal==='rg'){helpClose();goTab('about');setTimeout(()=>openLegal('Responsible Gambling', RG_HTML),200);return}
+  if(action.legal==='refunds'){helpClose();goTab('about');setTimeout(()=>openLegal('Refund Policy', REFUND_HTML),200);return}
+  if(action.tab){
+    helpClose();
+    goTab(action.tab, action.scroll==='plans-h'?1:0);
+    if(action.scroll&&action.scroll!=='plans-h'){
+      setTimeout(()=>{
+        const el=document.getElementById(action.scroll);
+        if(el)el.scrollIntoView({behavior:'smooth',block:'center'});
+      },180);
+    }
+  }
+}
+function helpActionsHtml(item){
+  const parts=[];
+  (item.go||[]).forEach((g,i)=>{
+    parts.push(`<button type="button" class="ghost" data-hgo="${i}">${esc(g.label)}</button>`);
+  });
+  parts.push(`<button type="button" class="ghost" data-more="1">More questions</button>`);
+  return parts.length?`<div class="help-actions">${parts.join('')}</div>`:'';
+}
+function helpBindActions(item){
+  const body=$('#help-body');if(!body)return;
+  body.querySelectorAll('[data-hgo]').forEach(b=>{
+    b.onclick=()=>{
+      const i=parseInt(b.dataset.hgo,10);
+      const act=(item&&item.go&&item.go[i])||null;
+      helpRunGo(act);
+    };
+  });
+  body.querySelectorAll('[data-more]').forEach(b=>b.onclick=()=>helpShowSuggestions());
+  body.querySelectorAll('[data-near]').forEach(b=>{
+    b.onclick=()=>{
+      const idx=parseInt(b.dataset.near,10);
+      if(HELP_QA[idx]) helpAsk(HELP_QA[idx].q[0]);
+    };
+  });
+}
+function helpAddMsg(role,html){
+  const box=$('#help-messages');if(!box)return;
+  const div=document.createElement('div');
+  div.className='help-msg '+role;
+  div.innerHTML=html;
+  box.appendChild(div);
+  const body=$('#help-body');if(body)body.scrollTop=body.scrollHeight;
+}
+function helpShowSuggestions(list){
+  const el=$('#help-suggestions');if(!el)return;
+  el.innerHTML=(list||HELP_SUGGEST).map(t=>`<button type="button" data-hq="${esc(t)}">${esc(t)}</button>`).join('');
+  el.querySelectorAll('[data-hq]').forEach(b=>b.onclick=()=>{helpAsk(b.dataset.hq)});
+}
+function helpAsk(raw){
+  const q=(raw||'').trim();if(!q)return;
+  helpAddMsg('user',esc(q));
+  const hit=helpMatch(q);
+  if(hit&&hit.item){
+    helpAddMsg('bot',esc(hit.item.a)+helpActionsHtml(hit.item));
+    helpBindActions(hit.item);
+  }else if(hit&&hit.near){
+    const idx=HELP_QA.indexOf(hit.near);
+    const label=hit.near.q[0];
+    helpAddMsg('bot',`I don’t have an exact match. Did you mean: <b>${esc(label)}</b>?<div class="help-actions"><button type="button" data-near="${idx}">Yes — show that answer</button><a class="ghost" href="${helpEmailLink(q)}">Email support</a><button type="button" class="ghost" data-more="1">Show suggestions</button></div>`);
+    helpBindActions(hit.near);
+  }else{
+    helpAddMsg('bot',`I don’t have a prepared answer for that yet. You can try one of the suggested questions, or email support and we’ll help you directly.<div class="help-actions"><a class="ghost" href="${helpEmailLink(q)}">Email support</a><button type="button" class="ghost" data-more="1">Show suggestions</button></div>`);
+    helpBindActions(null);
+  }
+  $('#help-suggestions').innerHTML='';
+  const inp=$('#help-input');if(inp)inp.value='';
+}
+function helpOpen(prefill){
+  const m=$('#help-modal');if(!m)return;
+  m.hidden=false;document.body.classList.add('help-open');
+  const box=$('#help-messages');
+  if(box&&!box.children.length){
+    helpAddMsg('bot','Hi — ask me about plans, keys, booking codes, alerts, payments or anything else in MatchDesk. Tap a suggestion or type your own question.');
+    helpShowSuggestions();
+  }
+  if(prefill){
+    setTimeout(()=>helpAsk(prefill),60);
+  }else{
+    setTimeout(()=>$('#help-input')?.focus(),80);
+  }
+}
+function helpClose(){
+  const m=$('#help-modal');if(m)m.hidden=true;
+  document.body.classList.remove('help-open');
+}
+function helpNeedBtn(topic,label){
+  return `<button type="button" class="ghost help-need" data-help-topic="${esc(topic)}">${esc(label||'Need help?')}</button>`;
+}
+function helpWireNeed(root){
+  (root||document).querySelectorAll('[data-help-topic]').forEach(b=>{
+    if(b._helpWired)return;b._helpWired=true;
+    b.onclick=e=>{e.preventDefault();e.stopPropagation();helpOpen(b.dataset.helpTopic)};
+  });
+}
+$('#help-btn')&&($('#help-btn').onclick=()=>helpOpen());
+$('#help-close')&&($('#help-close').onclick=helpClose);
+$('#help-backdrop')&&($('#help-backdrop').onclick=helpClose);
+$('#help-form')&&($('#help-form').onsubmit=e=>{e.preventDefault();helpAsk($('#help-input')?.value||'')});
 
 // ---------- offline + network status ----------
 function syncOfflineBar(){

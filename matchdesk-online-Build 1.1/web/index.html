@@ -71,7 +71,19 @@
  <h3 id="plans-h">🔑 License &amp; Plans</h3>
  <div class="card" id="liccard"><b id="lichead">…</b><p id="licdetail" class="muted"></p>
   <div class="row"><input id="lickey" placeholder="Paste your license key (starts with MD1…)" autocomplete="off" autocapitalize="characters" spellcheck="false" style="flex:1;min-width:0;width:auto"><button id="licact">Activate</button></div>
-  <div class="row"><button id="licpaste" class="ghost">📋 Paste key</button><button id="licremove" class="ghost" hidden>Remove key</button></div><p id="licmsg" class="muted"></p></div><p class="muted" style="margin:4px 0 0">Tap a paid plan card to open the matching PayPal checkout. After payment your licence key is emailed to the PayPal account address.</p><div id="plans" class="muted">Loading prices…</div>
+  <div class="row"><button id="licpaste" class="ghost">📋 Paste key</button><button id="licremove" class="ghost" hidden>Remove key</button></div><p id="licmsg" class="muted"></p>
+  <button type="button" id="lic-need-help" class="ghost help-need" hidden data-help-topic="what happens when my trial ends">Need help?</button>
+ </div>
+ <div id="paypal-checklist" class="card" style="margin:10px 0;border-left:3px solid var(--ac)">
+  <b>After you pay with PayPal</b>
+  <ol style="margin:8px 0 0;padding-left:18px;font-size:13px;line-height:1.5">
+   <li>Check the email on your <b>PayPal account</b> for the licence key</li>
+   <li>Paste the key in the box above</li>
+   <li>Tap <b>Activate</b> — you are on Pro</li>
+  </ol>
+  <p class="muted" style="margin:8px 0 0;font-size:12px">Keys do not auto-renew. Support: Matchdesksupport@gmail.com</p>
+ </div>
+ <p id="plans-hint" class="muted" style="margin:4px 0 0">Tap a paid plan card to open PayPal checkout. After payment your licence key is emailed to the PayPal account address.</p><div id="plans" class="muted">Loading prices…</div>
  <h3>About</h3><p>MatchDesk gives live scores (ESPN) and an estimate-based bet slip analyzer. Everything runs on your device; nothing is uploaded.</p>
  <p><b>Disclaimer:</b> All analysis, fair-probability estimates, risk ratings, form notes and AI commentary are informational estimates only and do not constitute betting, financial or investment advice. No outcome is guaranteed. Form, league and head-to-head data (when available) are historical and do not predict future results. 18+ only. Gamble responsibly. You bet at your own risk. Contact: Matchdesksupport@gmail.com</p>
  <h3>Settings — optional API keys</h3>
@@ -106,7 +118,28 @@
  <button id="install" hidden>Install app</button>
 </section></main>
 <nav><button data-t="dash" class="on">🏠<span>Home</span></button><button data-t="analyzer">🎯<span>Analyzer</span></button><button data-t="scores">⚽<span>Live Scores</span></button><button data-t="video">📺<span>Video</span></button><button data-t="history">📒<span>History</span></button><button data-t="about">❓<span>About</span></button></nav>
+<button id="help-btn" type="button" title="Help &amp; FAQ">💬 Help</button>
 <button id="tour-btn" type="button" title="Take a quick tour of MatchDesk">🧭 Tour</button>
+
+<div id="help-modal" hidden>
+ <div class="help-backdrop" id="help-backdrop"></div>
+ <div class="help-panel" role="dialog" aria-modal="true" aria-labelledby="help-title">
+  <div class="help-head">
+   <h3 id="help-title">💬 MatchDesk Help</h3>
+   <button type="button" id="help-close" class="ghost" aria-label="Close">✕</button>
+  </div>
+  <div class="help-body" id="help-body">
+   <div id="help-messages"></div>
+   <div id="help-suggestions" class="help-suggestions"></div>
+  </div>
+  <div class="help-foot">
+   <form id="help-form" autocomplete="off">
+    <input id="help-input" type="text" placeholder="Type a question…" maxlength="200" enterkeyhint="send">
+    <button type="submit" id="help-send" aria-label="Send">➤</button>
+   </form>
+  </div>
+ </div>
+</div>
 
 <div id="legal-modal" hidden>
  <div class="legal-backdrop" id="legal-backdrop"></div>
