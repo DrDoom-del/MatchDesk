@@ -529,7 +529,7 @@ const UPW=new Set(['1up','2up','3up','4up','5up','1 up','2 up','3 up','4 up','5 
 const isTab=l=>{const s=l.trim();if(!s||s.length>40)return false;const lo=s.toLowerCase();
  if(['double chance','bet builder','build a bet','build-a-bet'].includes(lo))return false;
  const p=lo.split(/\s*[/&+,]\s*/).filter(Boolean);if(p.length>1&&p.every(x=>TAB_RE.test(x)))return true;return TAB_RE.test(s)};
-const isUp=l=>{const t=l.trim().toLowerCase();return UPW.has(t)||/^\d{1,2}\s*up\b(?:\s*\(?\s*ep\s*\)?)?$/.test(t)||/^\d{1,2}:\d{2}(?:\s*(am|pm))?$/.test(t)||/^(today|tonight|tomorrow|tmrw|mon|tue|wed|thu|fri|sat|sun)\w*(\s+\d{1,2}[:.]\d{2})?\s*$/.test(t)};
+const isUp=l=>{const t=l.trim().toLowerCase();return UPW.has(t)||/^\d{1,2}\s*up\b(?:\s*\(?\s*ep\s*\)?)?$/.test(t)||/^\d{1,2}:\d{2}(?:\s*(am|pm))?$/.test(t)||/^(today|tonight|tomorrow|tmrw|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(?:\s+\d{1,2}[:.]\d{2})?\s*$/.test(t)};
 function cleanBetway(t){return t.replace(/\[([^\]]+)\]\(\s*https?:\/\/[^)]*\)/g,'$1').replace(/https?:\/\/\S+/g,'').replace(/<[^>]+>/g,'').replace(/\u00a0/g,' ').replace(/[ \t]+/g,' ').replace(/ *\n */g,'\n').replace(/\n{3,}/g,'\n\n').trim()}
 function stripTabs(L){const o=[];for(let i=0;i<L.length;){
  if(!isTab(L[i])){o.push(L[i++]);continue}
@@ -975,14 +975,21 @@ function ocrClean(t){
   l=l.replace(/(?<![\w])x2([12x])(?=\s)/i,'1x2$1');
   l=l.replace(/(\d[.,]?\d{2})\s*[§®©xX×B●•]\s*$/,'$1');
   l=l.replace(/[‐‑‒–—]/g,'-');
-  // Hollywoodbets headings are often read with a tilde instead of the separator.
-  l=l.replace(/^(full\s*time(?:\s*result)?|double\s*chance|match\s*result|match\s*winner|draw\s*no\s*bet)\s*[~|:]\s*/i,'$1 - ');
+  // Hollywoodbets headings are often read with a tilde / pipe instead of the separator.
+  l=l.replace(/^(full\s*time(?:\s*result)?|double\s*chance|match\s*result|match\s*winner|draw\s*no\s*bet|1x2|btts|both\s*teams(?:\s*to\s*score)?|total(?:\s*goals)?|handicap|correct\s*score|half\s*time)\s*[~|:]\s*/i,'$1 - ');
   // OCR commonly joins the words in the Double Chance selection.
   l=l.replace(/\b([A-Za-z]{2,})\s*ORDRAW\b/i,'$1 OR DRAW');
+  l=l.replace(/\bOR\s*DRAW\b/i,'OR DRAW');
+  // Common OCR misreads of team separators
+  l=l.replace(/\s+[Vv]\s+/g,' vs ');
+  l=l.replace(/\s+v\.s\.?\s+/i,' vs ');
+  // Strip leading junk symbols OCR often prefixes on HWB cards
+  l=l.replace(/^['"`‘’“”•●○◦▪▸►]\s*/,'');
   // A standalone three-digit price such as 130 is frequently a lost decimal (1.30).
   if(/^\d{3}$/.test(l)&&Number(l)>=101&&Number(l)<=500)l=l[0]+'.'+l.slice(1);
   if(/[A-Za-z]{3}/.test(l)&&! /\d{1,2}:\d{2}|\d{4}/.test(l))
    l=l.replace(/(\s)([1-9])(\d{2})(?=\s*(?:[xX×]|$))/,'$1$2.$3');
+  // Profit-style odds sometimes lose the leading zero: ".45" already handled by toHW
   return l}).filter(Boolean).join('\n')}
 
 let tessP;const loadTess=()=>tessP||(tessP=new Promise((ok,no)=>{const e=document.createElement('script');
@@ -1042,13 +1049,16 @@ addEventListener('paste',e=>{const f=[...(e.clipboardData?.files||[])].find(x=>x
 function extractCode(raw,bookie='Auto'){raw=(raw||'').trim();if(!raw)return['',bookie];let m;
  if(m=raw.match(/[?&#]bookingCode=([A-Za-z0-9_-]+)/i))return[m[1],'Betway'];
  if(m=raw.match(/[?&#]shareCode=([A-Za-z0-9_-]+)/i))return[m[1],bookie];
- if(m=raw.match(/hollywoodbets\.net\/betting\/([0-9A-Za-z_-]+)\/code/i))return[m[1],'Hollywoodbets'];
+ if(m=raw.match(/hollywoodbets\.net\/(?:betting|betslip\/share|share)\/([0-9A-Za-z_-]+)(?:\/code)?/i))return[m[1],'Hollywoodbets'];
  if(m=raw.match(/supabets\.co\.za\/Shared\/([0-9A-Za-z_-]+)/i))return[m[1],'Supabets'];
  if(m=raw.match(/sportingbet\.co\.za\/[^\s]*\/share-my-bet\/([0-9A-Za-z_-]+)/i))return[m[1],'Sportingbet'];
  if(m=raw.match(/\b(BW[0-9A-Fa-f]{6,12})\b/))return[m[1],'Betway'];
  if(m=raw.match(/\b(\d{8,14})\b/))return[m[1],['Auto','',null].includes(bookie)?'Hollywoodbets':bookie];
- if(/^[A-Za-z0-9_-]{5,20}$/.test(raw))return[raw,bookie];
- if(m=raw.match(/(?:booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})/i))return[m[1],bookie];
+ if(m=raw.match(/\b(HB[0-9A-Za-z]{3,12})\b/i))return[m[1],'Hollywoodbets'];
+ if(m=raw.match(/(?:bet\s*id|share\s*(?:bet\s*)?code|booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})/i)){
+  const c=m[1];if(!['Auto','',null].includes(bookie))return[c,bookie];
+  if(/^\d{8,14}$/.test(c)||/^HB[0-9A-Za-z]/i.test(c))return[c,'Hollywoodbets'];return[c,bookie]}
+ if(/^[A-Za-z0-9_-]{5,20}$/.test(raw)){if(['Auto','',null].includes(bookie)&&/^HB[0-9A-Za-z]/i.test(raw))return[raw,'Hollywoodbets'];return[raw,bookie]}
  return[raw,bookie]}
 const SITE={Betway:c=>[`https://www.betway.co.za/book-a-bet-results?bookingCode=${encodeURIComponent(c)}`],
  Supabets:c=>[`https://old.supabets.co.za/Shared/${encodeURIComponent(c)}`,`https://www.supabets.co.za/Shared/${encodeURIComponent(c)}`],
@@ -1080,7 +1090,7 @@ async function helperResolve(code,bookie,st){
 async function bookingOpen(){
  const raw=$('#bcode').value.trim(),st=$('#bst');if(!raw){st.textContent='Type or paste a booking code, Bet ID or share link first.';return}
  if(looksLikeSlip(raw)){$('#slip').value=raw;$('#bcode').value='';st.textContent='That looks like a full slip, so I analyzed it directly.';$('#analyze').click();return}
- const sel=$('#bsite').value;let[code,bk]=extractCode(raw,sel);if(sel!=='Auto')bk=sel;if(bk==='Auto'||!bk)bk=/^BW/i.test(code)?'Betway':(/^\d{8,14}$/.test(code)?'Hollywoodbets':'Auto');
+ const sel=$('#bsite').value;let[code,bk]=extractCode(raw,sel);if(sel!=='Auto')bk=sel;if(bk==='Auto'||!bk)bk=/^BW/i.test(code)?'Betway':(/^\d{8,14}$/.test(code)||/^HB[0-9A-Za-z]/i.test(code)?'Hollywoodbets':'Auto');
  const hr=await helperResolve(raw,bk==='Auto'?sel:bk,st);
  if(hr){if(hr.ok&&hr.text){$('#slip').value=hr.text;st.textContent=(hr.message||'Loaded.')+' Analyzed on the right.';$('#analyze').click();
   if(!lastLegs.length)st.innerHTML=`The slip loaded, but I could not read any legs from it. This is what came back:<pre class="raw">${esc(hr.text.slice(0,600))}</pre>Copy this text to me and I will fix the reader.`;return}

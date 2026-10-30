@@ -238,8 +238,8 @@ def _extract_booking_code(raw, bookie="Auto"):
     m = re.search(r"(?i)betway.co.za/book-a-bet-results[^\s]*bookingCode=([A-Za-z0-9_-]+)", raw)
     if m:
         return m.group(1).strip(), "Betway"
-    # Hollywoodbets: /betting/{code}/code
-    m = re.search(r"(?i)hollywoodbets\.net/betting/([0-9A-Za-z_-]+)/code", raw)
+    # Hollywoodbets: /betting/{code}/code and common share variants
+    m = re.search(r"(?i)hollywoodbets\.net/(?:betting|betslip/share|share)/([0-9A-Za-z_-]+)(?:/code)?", raw)
     if m:
         return m.group(1).strip(), "Hollywoodbets"
     # Supabets Shared/{code}
@@ -254,21 +254,32 @@ def _extract_booking_code(raw, bookie="Auto"):
     m = re.search(r"\b(BW[0-9A-Fa-f]{6,12})\b", raw)
     if m:
         return m.group(1).strip(), "Betway"
-    # Long numeric Hollywoodbets-style codes (8–14 digits)
+    # Long numeric Hollywoodbets-style Bet IDs (8–14 digits)
     m = re.search(r"\b(\d{8,14})\b", raw)
     if m:
         hint = bookie if bookie not in ("Auto", "", None) else "Hollywoodbets"
         return m.group(1).strip(), hint
+    # Hollywoodbets alphanumeric share codes (e.g. HB4K7T2)
+    m = re.search(r"\b(HB[0-9A-Za-z]{3,12})\b", raw)
+    if m:
+        return m.group(1).strip(), "Hollywoodbets"
+    # Explicit Bet ID / share / booking code label → prefer Hollywoodbets when Auto
+    m = re.search(
+        r"(?i)(?:bet\s*id|share\s*(?:bet\s*)?code|booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})",
+        raw,
+    )
+    if m:
+        code = m.group(1).strip()
+        if bookie not in ("Auto", "", None):
+            return code, bookie
+        if re.fullmatch(r"\d{8,14}", code) or re.match(r"(?i)^HB[0-9A-Za-z]", code):
+            return code, "Hollywoodbets"
+        return code, bookie
     # Generic short alphanumeric booking code (standalone token)
     if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", raw):
+        if bookie in ("Auto", "", None) and re.match(r"(?i)^HB[0-9A-Za-z]", raw):
+            return raw, "Hollywoodbets"
         return raw, bookie
-    m = re.search(r"(?i)(?:booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})", raw)
-    if m:
-        return m.group(1).strip(), bookie
-    return raw, bookie
-    m = re.search(r"(?i)(?:booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})", raw)
-    if m:
-        return m.group(1).strip(), bookie
     return raw, bookie
 
 _SLIP_HEAD_RE = re.compile(
@@ -279,18 +290,23 @@ _SLIP_END_RE = re.compile(
     r"(?i)^(?:total\s*odds|multi\s*bet|multibet|total\s*stake|stake\b|"
     r"potential|place\s*bet|possible\s*(?:win|return)|payout)")
 
-_SLIP_ODDS_RE = re.compile(r"^\d{1,4}\.\d{2}$")
+_SLIP_ODDS_RE = re.compile(r"^(?:\d{1,4}[.,]\d{2}|\.\d{2})$")
 
 _SLIP_JUNK = ("cookie", "privacy", "responsible", "licence", "license",
               "sign in", "log in", "register", "download the app", "18+")
 
 def _count_anchor_legs(chunk):
-    """How many 'name / odds' pairs a block of lines contains."""
+    """How many 'name / odds' pairs a block of lines contains.
+
+    Hollywoodbets often shows profit odds (0.45 → decimal 1.45), so values
+    between 0.01 and 0.99 count as selection prices as well.
+    """
     n = 0
     for i, l in enumerate(chunk):
         if i and _SLIP_ODDS_RE.match(l) and not _SLIP_ODDS_RE.match(chunk[i - 1]):
             try:
-                if float(l) > 1.0:
+                v = float(l)
+                if v > 1.0 or (0.01 <= v < 1.0):
                     n += 1
             except ValueError:
                 pass
@@ -374,11 +390,19 @@ _HWB_HEAD_RE = re.compile(
     r"(?i)^(?:full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|"
     r"double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|"
     r"btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|"
-    r"correct\s*score|half\s*time)\s*[-–—:]"
+    r"correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|"
+    r"clean\s*sheet|to\s*score|odd/?even|exact\s*goals|"
+    r"which\s*team\s*to\s*score)"
+    r"(?:\s*[-–—:~|].*)?$"
 )
 
 def _isolate_hwb_slip(lines):
-    """Keep every Hollywoodbets market heading through to the slip footer."""
+    """Keep every Hollywoodbets market heading through to the slip footer.
+
+    Accepts both 'Market - Pick' and stacked 'Market' / 'Pick' layouts so
+    multi-leg tickets are not truncated when OCR or the share page omits
+    separators.
+    """
     heads = [i for i, l in enumerate(lines) if _HWB_HEAD_RE.match(l)]
     if len(heads) < 1:
         return None
@@ -389,7 +413,13 @@ def _isolate_hwb_slip(lines):
             end = i
             break
     chunk = lines[start:end]
-    if len(heads) >= 2 or _count_anchor_legs(chunk) >= 2:
+    # Keep the block whenever we have at least one market heading and either
+    # multiple heads, multiple price anchors, or any price at all (single-leg).
+    if len(heads) >= 1 and (
+        len(heads) >= 2
+        or _count_anchor_legs(chunk) >= 1
+        or any(re.search(r"(?<!\d)\d{1,3}[.,]\d{2}(?!\d)", ln) for ln in chunk)
+    ):
         return "\n".join(chunk)
     return None
 
@@ -1243,13 +1273,17 @@ def resolve_booking_code(code, bookie):
                            "Analyze runs automatically.")
 
     # --- Hollywoodbets: intercept share-page JSON, keep every selection ------
-    hwb_code = bool(re.fullmatch(r"\d{8,14}", code))
+    # Numeric Bet IDs (8–14 digits) and alphanumeric share codes (HB…) both load.
+    hwb_code = bool(re.fullmatch(r"\d{8,14}", code) or re.match(r"(?i)^HB[0-9A-Za-z]{3,12}$", code))
     hwb_url = bool(re.search(r"(?i)hollywoodbets\.net", raw_in or code or ""))
     if (hwb_code or hwb_url or bookie == "Hollywoodbets") and \
             bookie in (None, "", "Auto", "Hollywoodbets"):
         hcode = code
         if hwb_url and not hwb_code:
-            m = re.search(r"(?i)hollywoodbets\.net/betting/([0-9A-Za-z_-]+)/code", raw_in or code)
+            m = re.search(
+                r"(?i)hollywoodbets\.net/(?:betting|betslip/share|share)/([0-9A-Za-z_-]+)(?:/code)?",
+                raw_in or code,
+            )
             if m:
                 hcode = m.group(1)
         legs, htext, hmsg = fetch_hollywoodbets_booking(hcode)
