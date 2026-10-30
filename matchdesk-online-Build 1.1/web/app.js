@@ -559,7 +559,7 @@ function junk(l){if(l.is_bab)return false;const s=l.sel.replace(/[\s:]+$/,'').tr
  return isTab(s)||isUp(s)||KICK_RE.test(s)||isFoot(s)||(s.replace(/[^A-Za-z]/g,'').length<2&&l.match==='Unknown')}
 // ---- SA bookmaker parsers, ported from MatchDesk.py ----
 const toF=x=>{if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);return /^\d+(\.\d+)?$/.test(t)&&v>1?v:null};
-const toHW=x=>{/* v5: same as Betway, no +1 */if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);if(!/^\d+(\.\d+)?$/.test(t)||v<=0||v>500)return null;return v<=1?v+1:v};
+const toHW=x=>{/* Hollywoodbets copied slips may show profit-only prices; convert 0.xx to decimal odds by adding 1. */if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);if(!/^\d+(\.\d+)?$/.test(t)||v<=0||v>500)return null;return v<=1?v+1:v};
 const lines0=t=>t.replace(/\r\n?/g,'\n').split('\n').map(l=>l.replace(/[ \t]+/g,' ').trim()).filter(Boolean);
 const mkLeg=(o,b)=>({sub_legs:[],is_bab:false,bookmaker:b,...o});
 function parseHWB(text){
@@ -735,10 +735,23 @@ function detectBookie(t){const lo=t.toLowerCase();
 const SPEC={Hollywoodbets:parseHWB,'10Bet':parse10Bet,Supabets:parseSupa,Sportingbet:parseSporting};
 function parse(text){
  const bk=detectBookie(text),clean=cleanBetway(text);
+ // Hollywoodbets copied slips have a stable market / selection / price / fixture
+ // layout. Prefer that parser outright when it returns legs; choosing whichever
+ // parser happens to return the most legs caused a generic parser to overwrite
+ // valid fractional prices (e.g. 0.16) and merge the selection into its label.
+ if(bk==='Hollywoodbets'){
+  const candidates=[];
+  for(const t of [text,clean]){
+   for(const fn of [parseHWBTicket,parseHWBStructured,parseHWBFallback,parseHWB]){
+    try{const g=(fn(t)||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)candidates.push(g)}catch{}
+   }
+  }
+  const score=legs=>legs.reduce((n,l)=>n+(Number(l.odds)>1?4:0)+(l.match&&l.match!=='Unknown'?2:0)+(l.sel&&l.sel.length>2?1:0),0);
+  if(candidates.length){candidates.sort((a,b)=>score(b)-score(a)||b.length-a.length);return candidates[0]}
+ }
  if(SPEC[bk]){
   let best=[];
   for(const t of [text,clean]){let g;try{g=SPEC[bk](t)}catch{};g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g}
-  if(bk==='Hollywoodbets'){let g;try{g=parseHWBTicket(text)||parseHWBTicket(clean)}catch{};if(g&&g.length>best.length)best=g;try{g=parseHWBStructured(text)||parseHWBStructured(clean)}catch{};g=(g||[]).filter(l=>!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g;try{g=parseHWBFallback(text)||parseHWBFallback(clean)}catch{};g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g}
   if(best.length)return best;
  }
  let L=stripTabs(clean.split('\n').map(x=>x.trim()).filter(Boolean));
