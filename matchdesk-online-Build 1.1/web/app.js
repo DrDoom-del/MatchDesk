@@ -91,24 +91,38 @@ $('#twhole').onclick=()=>{addEntries([{team:'🌐 '+leagueName(),sport:$('#sport
 $('#madd').onclick=()=>{const sport=$('#msport').value.trim().toLowerCase(),lg=$('#mleague').value.trim(),team=$('#mteam').value.trim(),st=$('#mst');
  if(!sport||!lg){st.textContent='Enter a sport and a league code (for example soccer + eng.1).';return}
  const n=addEntries([{team:team||'🌐 '+sport+'/'+lg,sport,league:lg}]);st.textContent=n?`Tracking ${team||'the whole '+lg+' league'} (${sport}/${lg}). If nothing shows up, check the league code.`:'Already tracking that (or the limit of '+MAX_TRACK+' is reached).';$('#mteam').value='';loadScores()};
+function detectLegSport(l){
+  const blob=((l&&l.match)||'')+' '+((l&&l.market)||'')+' '+((l&&l.sel)||'')+' '+((l&&l.bookmaker)||'');
+  const low=blob.toLowerCase();
+  // Cricket: nations, formats, language
+  const ckWords=/\b(cricket|t20|t20i|odi|test match|innings|wickets?|runs?|bowled|lbw|super over)\b/i;
+  const nations=NATIONS.map(n=>n.toLowerCase());
+  const hasNation=nations.some(n=>low.includes(n.toLowerCase()));
+  if(ckWords.test(low)||hasNation&&/\b(vs?\.?|v)\b/.test(low)&&!/\b(united|city|fc|afc)\b/.test(low))return 'cricket';
+  // Rugby
+  if(/\b(rugby|try scorer|tries|scrum|lineout|urc|top 14|super rugby|premiership rugby|six nations|champions cup)\b/i.test(low))return 'rugby';
+  return 'soccer';
+}
 function addSlipTeams(legs){
-  const raw=(legs||[]).flatMap(l=>teamsOf(l.match)).filter(Boolean);
-  // Prefer longer / more complete names, apply alias, dedupe by normalized key
   const byKey=new Map();
-  for(const n of raw){
-    const cleaned=(n||'').replace(/\s+/g,' ').trim();
-    if(!cleaned||cleaned.length<2)continue;
-    const can=alias(cleaned);
-    const key=normTeam(can);
-    if(!key)continue;
-    const prev=byKey.get(key);
-    // keep the nicer display name (prefer the aliased or longer original)
-    if(!prev||can.length>prev.team.length||(can===cleaned&&prev.team!==cleaned))byKey.set(key,{team:can,sport:'soccer',league:''});
+  for(const l of (legs||[])){
+    const sport=detectLegSport(l);
+    const names=teamsOf(l.match).filter(Boolean);
+    for(const n of names){
+      const cleaned=(n||'').replace(/\s+/g,' ').trim();
+      if(!cleaned||cleaned.length<2)continue;
+      const can=typeof alias==='function'?alias(cleaned):cleaned;
+      const key=sport+'|'+normTeam(can);
+      if(!normTeam(can))continue;
+      const prev=byKey.get(key);
+      const entry={team:can,sport,league:sport==='cricket'?'current':sport==='rugby'?'':'',};
+      if(!prev||can.length>prev.team.length)byKey.set(key,entry);
+    }
   }
   const entries=[...byKey.values()];
   if(!entries.length)return null;
   return[addEntries(entries),entries.length]}
-$('#fromslip').onclick=()=>{const r=addSlipTeams(lastLegs);$('#status').textContent=r?`Added ${r[0]} of ${r[1]} team(s) from your slip. They are looked up in the major leagues and cups; for a team in another league, open that league and tap the team.`:'No teams found – analyze a slip first.';loadScores()};
+$('#fromslip').onclick=()=>{const r=addSlipTeams(lastLegs);$('#status').textContent=r?`Added ${r[0]} of ${r[1]} team(s) from your slip. Soccer, cricket and rugby teams are tagged by sport when possible; open the matching sport/league if a score does not appear.`:'No teams found – analyze a slip first.';loadScores()};
 $('#scodebtn').onclick=async()=>{const raw=$('#scode').value.trim(),st=$('#scst');if(!raw){st.textContent='Type or paste a booking code, Bet ID or link first.';return}
  let text=raw;if(!looksLikeSlip(raw)){st.textContent='Loading the slip from the bookmaker…';const hr=await helperResolve(raw,'Auto',st);
   if(!hr){st.innerHTML='Loading a code needs the MatchDesk server (or the local helper). You can paste the slip text here instead. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
@@ -181,7 +195,10 @@ async function loadScores(){const my=++loadSeq,stEl=$('#status'),box=$('#matches
  const consider=(sport,league,team)=>{const sp=spt(sport);
   if(sp.special==='f1')f1Mode=(league==='season'||f1Mode==='season')?'season':'latest';
   else if(sp.special==='cricket'){ckNames=ckNames||[];if(!team||team.startsWith('🌐'))ckWhole=true;else ckNames.push(team)}
-  else if(league)pairs.add(sport+'|'+league);else if(sport==='soccer')MAJOR.forEach(l=>pairs.add('soccer|'+l))};
+  else if(league)pairs.add(sport+'|'+league);
+  else if(sport==='soccer')MAJOR.forEach(l=>pairs.add('soccer|'+l));
+  else if(sport==='rugby'&&SPORTS.rugby)SPORTS.rugby.leagues.forEach(L=>pairs.add('rugby|'+L[0]));
+ };
  if(!tr.length&&!browse){lastList=[];box.innerHTML=`<div class="card"><b>Nothing is being tracked.</b><p class="muted">Pick a league above and tap teams to follow them, or <button class="chip" id="browsebtn">show all matches in ${esc(leagueName())}</button></p></div>`;stEl.textContent='';try{drawVideo()}catch{}if($('#dash').classList.contains('on'))drawDash();return}
  if(!tr.length)consider($('#sport').value,$('#league').value,'');else tr.forEach(e=>consider(e.sport,e.league,e.team));
  const ymd=d=>{const x=new Date(d);return x.getFullYear()+String(x.getMonth()+1).padStart(2,'0')+String(x.getDate()).padStart(2,'0')};
@@ -326,8 +343,23 @@ function parseCrit(text){const raw=(text||'').trim(),low=raw.toLowerCase(),o={ra
  if(low.includes('corner')){o.market='Total Corners';m=low.match(/\b(over|under)\s*\(?\s*(\d+(?:\.\d+)?)\s*\)?/);if(m){o.kind='corners_'+m[1];o.line=parseFloat(m[2])}return o}
  if(low.includes('highest scoring half')){o.market='Highest Scoring Half';if(/2nd|second/.test(low))o.kind='hsh_2h';else if(/1st|first/.test(low))o.kind='hsh_1h';return o}
  if(low.includes('win either half')){o.market='Win Either Half';o.kind='win_either_half';m=low.match(/^(.+?)\s+to\s+win either half/);if(m)o.side=m[1].trim();return o}
- if(/\b(match result|full time result|1x2|to win)\b/.test(low)){o.market='1X2';o.kind='win';return o}
+ if(/\b(match result|full time result|1x2|to win)\b/.test(low)||/^1x2\b/.test(low)){o.market='1X2';o.kind='win';
+  if(/\bdraw\b/.test(low)||/(?:^|[\s:])x(?:\s|$)/.test(low)){o.kind='draw';o.side='draw'}
+  else if(/\bhome\b/.test(low)||/(?:^|[\s:])1(?:\s|$)/.test(low)){o.kind='home';o.side='home'}
+  else if(/\baway\b/.test(low)||/(?:^|[\s:])2(?:\s|$)/.test(low)){o.kind='away';o.side='away'}
+  else{const after=(low.split(/[:\-–—]/).pop()||low).replace(/\b(to win|win|match result|full time|1x2|result)\b/g,'').trim();
+   if(after&&after.length>=3&&!/^(home|away|draw|1|2|x)$/.test(after))o.side=after}
+  return o}
  return o}
+
+// Exact over rate for any line from stored per-match totals (home+away samples pooled)
+function overRateFromTotals(hf,af,line){
+  const arr=[...(hf&&hf.totals||[]),...(af&&af.totals||[])];
+  if(arr.length<4)return null;
+  // whole-number lines: push (exact = line) is a push/refund — count as neither over nor under for rate of "over landing"
+  const over=arr.filter(t=>t>line).length, under=arr.filter(t=>t<line).length, push=arr.length-over-under;
+  return{over_pct:over/arr.length*100, under_pct:under/arr.length*100, push_pct:push/arr.length*100, n:arr.length};
+}
 function evalCrit(c,hf,af,hn='',an=''){
  if(!c||c.kind==='other')return[null,'',0];hf=hf||{};af=af||{};
  if(!Object.keys(hf).length&&!Object.keys(af).length)return[null,'',0];
@@ -335,13 +367,22 @@ function evalCrit(c,hf,af,hn='',an=''){
  const kind=c.kind,line=c.line,avg=k=>{const v=[];if(hf[k]!=null)v.push(hf[k]);if(af[k]!=null)v.push(af[k]);return v.length?v.reduce((a,b)=>a+b,0)/v.length:0};
  if((kind==='over'||kind==='under')&&line!=null&&[null,'1h','2h'].includes(c.side)){
   const pk={1.5:'over15_pct',2.5:'over25_pct',3.5:'over35_pct'}[line];
-  if(pk){const a=avg(pk),lb=`${kind==='over'?'Over':'Under'} ${line}`;
+  const lb=`${kind==='over'?'Over':'Under'} ${line}`;
+  if(pk){const a=avg(pk);
    if(kind==='over'){if(a>=58)return[true,`Form backs ${lb}: recent O${line} rate ~${a.toFixed(0)}%.`,.03];if(a<=35)return[false,`Form disagrees with ${lb}: recent O${line} rate only ~${a.toFixed(0)}%.`,-.04]}
-   else{const u=100-a;if(u>=58)return[true,`Form backs ${lb}: recent U${line} rate ~${u.toFixed(0)}%.`,.03];if(u<=35)return[false,`Form disagrees with ${lb}: recent U${line} rate only ~${u.toFixed(0)}%.`,-.04]}}
-  else{const t=avg('avg_total');if(t>0){
+   else{const u=100-a;if(u>=58)return[true,`Form backs ${lb}: recent U${line} rate ~${u.toFixed(0)}%.`,.03];if(u<=35)return[false,`Form disagrees with ${lb}: recent U${line} rate only ~${u.toFixed(0)}%.`,-.04]}
+   return[null,'',0]}
+  // Non-standard lines: exact rates from stored per-match totals when available
+  const er=overRateFromTotals(hf,af,line);
+  if(er){const a=er.over_pct,u=er.under_pct,pushNote=er.push_pct>=8?` (${er.push_pct.toFixed(0)}% pushed on exact ${line})`:'';
+   if(kind==='over'){if(a>=58)return[true,`Form backs ${lb}: landed in ${a.toFixed(0)}% of ${er.n} recent games${pushNote}.`,.02];if(a<=32)return[false,`Form disagrees with ${lb}: only ${a.toFixed(0)}% of ${er.n} recent games${pushNote}.`,-.03]}
+   else{if(u>=58)return[true,`Form backs ${lb}: under in ${u.toFixed(0)}% of ${er.n} recent games${pushNote}.`,.02];if(u<=32)return[false,`Form disagrees with ${lb}: under only ${u.toFixed(0)}% of ${er.n} recent games${pushNote}.`,-.03]}
+   return[null,'',0]}
+  // Fallback: avg goals only
+  const t=avg('avg_total');if(t>0){
    if(kind==='under'&&line>=4.5&&t<=line-1.5)return[true,`Form backs Under ${line}: teams average only ${t.toFixed(1)} goals.`,.02];
    if(kind==='under'&&line>=4.5&&t>=line-.3)return[false,`Form questions Under ${line}: teams average ${t.toFixed(1)} goals.`,-.03];
-   if(kind==='over'&&line<=1.5&&t>=2.4)return[true,`Form backs Over ${line}: teams average ${t.toFixed(1)} goals.`,.02]}}
+   if(kind==='over'&&line<=1.5&&t>=2.4)return[true,`Form backs Over ${line}: teams average ${t.toFixed(1)} goals.`,.02]}
   return[null,'',0]}
  if((kind==='over'||kind==='under')&&typeof c.side==='string'&&c.side.startsWith('team:')){const tb=c.side.slice(5).trim();let use=null;const hl=hn.toLowerCase(),al=an.toLowerCase();
   if(hn&&tb&&hl.includes(tb))use=hf;else if(an&&tb&&al.includes(tb))use=af;
@@ -367,6 +408,39 @@ function evalCrit(c,hf,af,hn='',an=''){
   if(use&&use.avg_scored!=null){if(use.avg_scored>=1.4&&(use.win_pct||0)>=40)return[true,`Form mildly backs win-either-half: avg scored ${use.avg_scored.toFixed(1)}, win% ${(use.win_pct||0).toFixed(0)}.`,.015];
    if(use.avg_scored<=.7)return[false,`Form questions win-either-half: avg scored only ${use.avg_scored.toFixed(1)}.`,-.025]}
   return[null,'',0]}
+ // 1X2 / win — information only (adj=0). Needs ≥6 matches; Mixed when signals conflict.
+ if(kind==='win'||kind==='home'||kind==='away'||kind==='draw'){
+  if(Math.min(hf.played||0,af.played||0)<6)return[null,'',0];
+  const side=(c.side||'').toLowerCase().trim();
+  if(kind==='draw'||side==='draw'||side==='x'){
+   const dp=((hf.draw_pct||0)+(af.draw_pct||0))/2;
+   if(dp>=34)return[true,`Form mildly backs a draw: recent draw rate ~${dp.toFixed(0)}% (small sample).`,0];
+   if(dp<=16)return[false,`Form questions a draw: recent draw rate only ~${dp.toFixed(0)}%.`,0];
+   return[null,'',0];
+  }
+  let use=null,label='';
+  if(kind==='home'||side==='home'||side==='1'){use=hf;label=hn||'home'}
+  else if(kind==='away'||side==='away'||side==='2'){use=af;label=an||'away'}
+  else if(side){
+   const hl=(hn||'').toLowerCase(),al=(an||'').toLowerCase();
+   if(hl&&(hl.includes(side)||side.includes(hl.split(' ')[0]))){use=hf;label=hn}
+   else if(al&&(al.includes(side)||side.includes(al.split(' ')[0]))){use=af;label=an}
+   else{
+    const toks=side.split(/\s+/).filter(w=>w.length>2);
+    if(toks.some(w=>hl.includes(w))){use=hf;label=hn}
+    else if(toks.some(w=>al.includes(w))){use=af;label=an}
+   }
+  }
+  if(!use)return[null,'',0];
+  const wp=use.win_pct||0, opp=use===hf?af:hf, owp=opp.win_pct||0;
+  const edge=(use.avg_scored||0)-(use.avg_conceded||0), oedge=(opp.avg_scored||0)-(opp.avg_conceded||0);
+  const strong=wp>=55&&wp>=owp+10, mild=wp>=48&&edge>=0.3&&edge>=oedge+0.2;
+  const weak=wp<=28||(wp<=owp-12&&edge<=-0.3), poor=wp<=32&&edge<=-0.5;
+  if(strong&&!weak)return[true,`Form leans ${label||'this side'}: win ${wp.toFixed(0)}% vs opp ${owp.toFixed(0)}% (last ${use.played} games — noisy).`,0];
+  if(mild&&!weak&&!poor)return[true,`Form mildly leans ${label||'this side'}: win ${wp.toFixed(0)}%, goal edge ${edge>=0?'+':''}${edge.toFixed(1)}.`,0];
+  if((weak||poor)&&!strong)return[false,`Form questions ${label||'this side'}: win only ${wp.toFixed(0)}% (opp ${owp.toFixed(0)}%).`,0];
+  if((strong||mild)&&(weak||poor))return[null,`Form mixed for ${label||'this side'}: win ${wp.toFixed(0)}% but other signals conflict.`,0];
+  return[null,'',0]}
  return[null,'',0]}
 function legKind(l){for(const c of l._criteria||[]){if((c.kind==='over'||c.kind==='under')&&c.line!=null)return[c.kind,c.line];if(c.kind==='btts_yes'||c.kind==='btts_no')return[c.kind,null]}
  const sel=(l.sel||'').toLowerCase().trim(),m=sel.match(/\b(over|under)\s*(\d+(?:.\d+)?)/);if(m)return[m[1],parseFloat(m[2])];
@@ -374,9 +448,15 @@ function legKind(l){for(const c of l._criteria||[]){if((c.kind==='over'||c.kind=
 function formCross(l){const S=l._form_support||[],F=l._form_flags||[];if(S.length||F.length)return F.length?[false,F[0]]:[true,S[0]];
  const hf=l.home_form,af=l.away_form;if(!hf||!af)return[null,''];if(Math.min(hf.played||0,af.played||0)<5)return[null,''];
  const k=legKind(l);if(!k)return[null,''];const[kind,line]=k,tag=`${l.sel||''} (${l.match||''})`;
- if(kind==='over'||kind==='under'){const pk={1.5:'over15_pct',2.5:'over25_pct',3.5:'over35_pct'}[line];if(!pk)return[null,''];const a=((hf[pk]||0)+(af[pk]||0))/2;
+ if(kind==='over'||kind==='under'){
+  const pk={1.5:'over15_pct',2.5:'over25_pct',3.5:'over35_pct'}[line];
+  let a=null;
+  if(pk)a=((hf[pk]||0)+(af[pk]||0))/2;
+  else{const er=overRateFromTotals(hf,af,line);if(er)a=er.over_pct}
+  if(a==null)return[null,''];
   if(kind==='over'){if(a>=58)return[true,`Recent form backs ${tag}: O${line} rate ~${a.toFixed(0)}%.`];if(a<=35)return[false,`Recent form disagrees with ${tag}: O${line} rate only ~${a.toFixed(0)}%.`]}
-  else{const u=100-a;if(u>=58)return[true,`Recent form backs ${tag}: U${line} rate ~${u.toFixed(0)}%.`];if(u<=35)return[false,`Recent form disagrees with ${tag}: U${line} rate only ~${u.toFixed(0)}%.`]}return[null,'']}
+  else{const u=100-a;if(u>=58)return[true,`Recent form backs ${tag}: U${line} rate ~${u.toFixed(0)}%.`];if(u<=35)return[false,`Recent form disagrees with ${tag}: U${line} rate only ~${u.toFixed(0)}%.`]}
+  return[null,'']}
  const a=((hf.btts_pct||0)+(af.btts_pct||0))/2;
  if(kind==='btts_yes'){if(a>=58)return[true,`Recent form backs ${tag}: BTTS rate ~${a.toFixed(0)}%.`];if(a<=35)return[false,`Recent form disagrees with ${tag}: BTTS rate only ~${a.toFixed(0)}%.`]}
  else{if(a<=40)return[true,`Recent form backs ${tag}: BTTS only ~${a.toFixed(0)}%.`];if(a>=65)return[false,`Recent form disagrees with ${tag}: BTTS rate ~${a.toFixed(0)}%.`]}
@@ -616,9 +696,18 @@ function totalCheck(prod,text){
 let lastLegs=[],lastCombos=[],lastTarget=5,shown=PAGE,lastText='';
 const teamsOf=m=>{const p=String(m||'').split(/\s+(?:-|–|—|vs\.?|v\.?)\s+/i);return p.length>=2&&p[0].trim()&&p[1].trim()&&String(m).toLowerCase()!=='unknown'?[p[0].trim(),p.slice(1).join(' - ').trim()]:[null,null]};
 const alias=n=>ALIASES[(n||'').toLowerCase().trim()]||n;
-function dataConf(l){if(l.home_form&&l.away_form){const n=(l._criteria||[]).filter(c=>c.kind!=='other').length;return['Form available','--g',`Form loaded${l._src?' ('+l._src+')':''} · ${(l._form_support||[]).length} backed · ${(l._form_flags||[]).length} disagreed`+(n?` · ${n} criteria classified`:'')]}
- if(l.home_form||l.away_form)return['Partial form','--y','Only one side matched in '+(l._src||'the data source')];
- if(l._form_lookup==='failed')return['Odds only','--y','Teams not found in ESPN or Football-Data data'];return['Odds only','--mu','No recent match data found']}
+function dataConf(l){
+ const S=l._form_support||[],F=l._form_flags||[],src=l._src?' ('+l._src+')':'';
+ const n=(l._criteria||[]).filter(c=>c.kind!=='other').length,nNote=n?` · ${n} criteria classified`:'';
+ if(l.home_form&&l.away_form){
+  if(F.length&&!S.length)return['Form disagrees','--o',`Recent form argues against this pick${src}${nNote}`];
+  if(S.length&&!F.length)return['Form backs pick','--g',`Recent form supports this pick${src}${nNote}`];
+  if(S.length&&F.length)return['Form mixed','--y',`Some signals back it, some disagree${src} · ${S.length} backed · ${F.length} disagreed${nNote}`];
+  return['No clear signal','--mu',`Form loaded${src} but no strong lean either way${nNote}`];
+ }
+ if(l.home_form||l.away_form)return['Partial form','--y','Only one side matched — fair % is mostly the de-vigged price'];
+ if(l._form_lookup==='failed')return['Odds only','--y','Teams not found in form data — showing book price with margin removed only'];
+ return['Odds only','--mu','No recent form data — fair % is the book price with estimated margin removed']}
 const formLine=(n,f)=>`${esc(n)}: form <b>${esc(f.form)}</b> (${f.played} matches) • scored ${f.avg_scored.toFixed(1)} • conceded ${f.avg_conceded.toFixed(1)} • BTTS ${f.btts_pct.toFixed(0)}% • O2.5 ${f.over25_pct.toFixed(0)}%`;
 function exHtml(l,i){if(l.is_bab&&!l.home_form)return '';const[h,a]=teamsOf(l.match);
  if(l._exStatus==='nokey')return i===lastLegs.findIndex(x=>x._exStatus==='nokey')?'<div class="ex muted">📊 Form, league position &amp; head-to-head: add your free Football-Data key in <b>About → Settings</b>.</div>':'';
@@ -925,13 +1014,13 @@ async function getForm(tid){const c=cacheGet('form_'+tid,6*36e5);if(c)return c;
  const now=new Date(),from=new Date(now-120*864e5),f=d=>d.toISOString().slice(0,10),r=await fd(`teams/${tid}/matches`,{dateFrom:f(from),dateTo:f(now),status:'FINISHED'});
  if(!r)return null;if(r.status===401||r.status===403)throw new Error('auth');if(!r.ok)return null;
  const ms=((await r.json()).matches||[]).sort((a,b)=>(a.utcDate||'').localeCompare(b.utcDate||'')).slice(-10);if(!ms.length)return null;
- let w=0,d=0,l=0,gf=0,ga=0,btts=0,o15=0,o25=0,o35=0,cs=0,fts=0;const form=[];
+ let w=0,d=0,l=0,gf=0,ga=0,btts=0,o15=0,o25=0,o35=0,cs=0,fts=0;const form=[],totals=[];
  for(const m of ms){const sc=m.score?.fullTime||{},hg=sc.home,ag=sc.away;if(hg==null||ag==null)continue;
   const isHome=m.homeTeam?.id===tid,tg=isHome?hg:ag,og=isHome?ag:hg;gf+=tg;ga+=og;
   if(tg>og){w++;form.push('W')}else if(tg===og){d++;form.push('D')}else{l++;form.push('L')}
-  if(hg>0&&ag>0)btts++;const t=hg+ag;if(t>1.5)o15++;if(t>2.5)o25++;if(t>3.5)o35++;if(og===0)cs++;if(tg===0)fts++}
+  if(hg>0&&ag>0)btts++;const t=hg+ag;totals.push(t);if(t>1.5)o15++;if(t>2.5)o25++;if(t>3.5)o35++;if(og===0)cs++;if(tg===0)fts++}
  const p=w+d+l;if(!p)return null;
- const out={form:form.slice(-5).reverse().join(' '),played:p,wins:w,draws:d,losses:l,avg_scored:gf/p,avg_conceded:ga/p,avg_total:(gf+ga)/p,btts_pct:btts/p*100,over15_pct:o15/p*100,over25_pct:o25/p*100,over35_pct:o35/p*100,win_pct:w/p*100,draw_pct:d/p*100,loss_pct:l/p*100,clean_sheet_pct:cs/p*100,failed_to_score_pct:fts/p*100};
+ const out={form:form.slice(-5).reverse().join(' '),played:p,wins:w,draws:d,losses:l,avg_scored:gf/p,avg_conceded:ga/p,avg_total:(gf+ga)/p,btts_pct:btts/p*100,over15_pct:o15/p*100,over25_pct:o25/p*100,over35_pct:o35/p*100,win_pct:w/p*100,draw_pct:d/p*100,loss_pct:l/p*100,clean_sheet_pct:cs/p*100,failed_to_score_pct:fts/p*100,totals};
  cacheSet('form_'+tid,out);return out}
 async function getTable(comp){const c=cacheGet('table_'+comp,24*36e5);if(c)return c;const r=await fd(`competitions/${comp}/standings`);if(!r||!r.ok)return null;
  const s=(await r.json()).standings||[],tot=s.filter(g=>(g.type||'TOTAL')==='TOTAL'),rows=(tot.length?tot:s).flatMap(g=>g.table||[]).map(x=>({id:x.team?.id,pos:x.position}));
@@ -966,12 +1055,12 @@ async function espnSeason(id,lg,season){const k=lg+'|'+id+'|'+(season||'cur'),c=
 async function espnRecent(id,lg){const cur=await espnSeason(id,lg);if(!cur)return null;let ms=cur.ms.slice();
  if(ms.length<8){const prev=await espnSeason(id,lg,cur.year-1);if(prev)ms=prev.ms.concat(ms)}
  const cut=Date.now()-150*864e5;return ms.filter(m=>Date.parse(m.utcDate)>=cut).slice(-10)}
-function formStats(ms,tid){let w=0,d=0,l=0,gf=0,ga=0,btts=0,o15=0,o25=0,o35=0,cs=0,fts=0;const form=[];
- for(const m of ms){const hg=m.score.fullTime.home,ag=m.score.fullTime.away,isHome=m.homeTeam.id===tid,tg=isHome?hg:ag,og=isHome?ag:hg;gf+=tg;ga+=og;
+function formStats(ms,tid){let w=0,d=0,l=0,gf=0,ga=0,btts=0,o15=0,o25=0,o35=0,cs=0,fts=0;const form=[],totals=[];
+ for(const m of ms){const hg=m.score.fullTime.home,ag=m.score.fullTime.away,isHome=String(m.homeTeam.id)===String(tid),tg=isHome?hg:ag,og=isHome?ag:hg;gf+=tg;ga+=og;
   if(tg>og){w++;form.push('W')}else if(tg===og){d++;form.push('D')}else{l++;form.push('L')}
-  if(hg>0&&ag>0)btts++;const t=hg+ag;if(t>1.5)o15++;if(t>2.5)o25++;if(t>3.5)o35++;if(og===0)cs++;if(tg===0)fts++}
+  if(hg>0&&ag>0)btts++;const t=hg+ag;totals.push(t);if(t>1.5)o15++;if(t>2.5)o25++;if(t>3.5)o35++;if(og===0)cs++;if(tg===0)fts++}
  const p=w+d+l;if(!p)return null;
- return{form:form.slice(-5).reverse().join(' '),played:p,wins:w,draws:d,losses:l,avg_scored:gf/p,avg_conceded:ga/p,avg_total:(gf+ga)/p,btts_pct:btts/p*100,over15_pct:o15/p*100,over25_pct:o25/p*100,over35_pct:o35/p*100,win_pct:w/p*100,draw_pct:d/p*100,loss_pct:l/p*100,clean_sheet_pct:cs/p*100,failed_to_score_pct:fts/p*100}}
+ return{form:form.slice(-5).reverse().join(' '),played:p,wins:w,draws:d,losses:l,avg_scored:gf/p,avg_conceded:ga/p,avg_total:(gf+ga)/p,btts_pct:btts/p*100,over15_pct:o15/p*100,over25_pct:o25/p*100,over35_pct:o35/p*100,win_pct:w/p*100,draw_pct:d/p*100,loss_pct:l/p*100,clean_sheet_pct:cs/p*100,failed_to_score_pct:fts/p*100,totals}}
 async function espnForm(id,lg){const c=cacheGet('eform_'+id,6*36e5);if(c)return c;const ms=await espnRecent(id,lg);if(!ms||ms.length<3)return null;
  const o=formStats(ms,String(id));if(o)cacheSet('eform_'+id,o);return o}
 async function espnTable(lg){const c=cacheGet('etable_'+lg,24*36e5);if(c)return c;
@@ -985,7 +1074,11 @@ async function espnH2H(hm,am){const key=`eh2h_${hm.id}_${am.id}`,c=cacheGet(key,
  const ms=all.filter(m=>(m.homeTeam.id===hm.id&&m.awayTeam.id===am.id)||(m.homeTeam.id===am.id&&m.awayTeam.id===hm.id)).sort((x,y)=>String(y.utcDate).localeCompare(String(x.utcDate))).slice(0,5);
  cacheSet(key,ms);return ms}
 function applyForm(l,hf,af,h,a,src){l.home_form=hf||undefined;l.away_form=af||undefined;l._src=src;
- const S=[],F=[];let adj=0,n=0;for(const c of l._criteria){const[ok,note,ad]=evalCrit(c,hf,af,h,a);if(ok===true&&note){S.push(note);adj+=ad;n++}else if(ok===false&&note){F.push(note);adj+=ad;n++}}
+ const S=[],F=[];let adj=0,n=0;for(const c of l._criteria){const[ok,note,ad]=evalCrit(c,hf,af,h,a);
+  if(ok===true&&note){S.push(note);if(ad){adj+=ad;n++}}
+  else if(ok===false&&note){F.push(note);if(ad){adj+=ad;n++}}
+  else if(note){F.push(note)} // mixed / informational (no probability change)
+ }
  l._form_support=S;l._form_flags=F;l._form_adj=n?Math.max(-.1,Math.min(.1,adj/Math.max(1,n)*1.2)):0}
 let ePrefer=null,fPrefer=null,fdBad=false;
 // ESPN league code -> Football-Data competition code (leagues the Football-Data free tier covers)
