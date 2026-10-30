@@ -1,0 +1,75 @@
+{
+  "Betway": {
+    "url": "https://www.betway.co.za/book-a-bet-results?bookingCode={code}",
+    "headers": {},
+    "list_path": "",
+    "selection": "selection",
+    "market": "market",
+    "match": "match",
+    "odds": "odds",
+    "spa": true
+  },
+  "Hollywoodbets": {
+    "url": "https://www.hollywoodbets.net/betting/{code}/code",
+    "headers": {},
+    "list_path": "",
+    "selection": "selection",
+    "market": "market",
+    "match": "match",
+    "odds": "odds",
+    "spa": true,
+    "alt_urls": [
+      "https://www.hollywoodbets.net/betting/{code}/code",
+      "https://new.hollywoodbets.net/betting/{code}/code",
+      "https://www.hollywoodbets.net/betslip/share/{code}",
+      "https://www.hollywoodbets.net/share/{code}",
+      "https://m.hollywoodbets.net/betting/{code}/code",
+      "https://www.hollywoodbets.co.za/betting/{code}/code",
+      "https://www.hollywoodbets.co.za/betslip/share/{code}"
+    ]
+  },
+  "10Bet": {
+    "url": "",
+    "headers": {},
+    "list_path": "",
+    "selection": "selection",
+    "market": "market",
+    "match": "match",
+    "odds": "odds",
+    "spa": false,
+    "paste_only": true
+  },
+  "Supabets": {
+    "url": "https://old.supabets.co.za/Shared/{code}",
+    "headers": {},
+    "list_path": "",
+    "selection": "selection",
+    "market": "market",
+    "match": "match",
+    "odds": "odds",
+    "spa": true,
+    "alt_urls": [
+      "https://new.supabets.co.za/Shared/{code}",
+      "https://www.supabets.co.za/Shared/{code}"
+    ]
+  },
+  "Sportingbet": {
+    "url": "https://www.sportingbet.co.za/en/sports/share-my-bet/{code}",
+    "headers": {},
+    "list_path": "",
+    "selection": "selection",
+    "market": "market",
+    "match": "match",
+    "odds": "odds",
+    "spa": true
+  },
+  "Other": {
+    "url": "",
+    "headers": {},
+    "list_path": "",
+    "selection": "selection",
+    "market": "market",
+    "match": "match",
+    "odds": "odds"
+  }
+}

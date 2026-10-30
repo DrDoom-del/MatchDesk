@@ -129,6 +129,8 @@ DEFAULT_BOOKIE_LOOKUP["Hollywoodbets"] = {
         "https://www.hollywoodbets.net/betslip/share/{code}",
         "https://www.hollywoodbets.net/share/{code}",
         "https://m.hollywoodbets.net/betting/{code}/code",
+        "https://www.hollywoodbets.co.za/betting/{code}/code",
+        "https://www.hollywoodbets.co.za/betslip/share/{code}",
     ],
 }
 
@@ -261,9 +263,9 @@ def _extract_booking_code(raw, bookie="Auto"):
     if m:
         return m.group(1).strip(), "Betway"
     # Hollywoodbets: /betting/{code}/code
-    m = re.search(r"(?i)hollywoodbets\.net/betting/([0-9A-Za-z_-]+)/code", raw)
+    m = re.search(r"(?i)hollywoodbets\.(?:net|co\.za)/(?:betting/([0-9A-Za-z_-]+)/code|betslip/share/([0-9A-Za-z_-]+)|share/([0-9A-Za-z_-]+))", raw)
     if m:
-        return m.group(1).strip(), "Hollywoodbets"
+        return next(g for g in m.groups() if g).strip(), "Hollywoodbets"
     # Supabets Shared/{code}
     m = re.search(r"(?i)supabets\.co\.za/Shared/([0-9A-Za-z_-]+)", raw)
     if m:
