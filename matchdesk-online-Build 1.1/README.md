@@ -100,3 +100,18 @@ Support address shown in the app: Matchdesksupport@gmail.com.
 
 
 Hollywoodbets reliability update: screenshot OCR parsing now recognizes cropped slips without the bookmaker header, reads odds displayed on the same line as a selection, and prioritizes the dedicated Hollywoodbets leg parser. The server-side Hollywoodbets browser lookup no longer waits for network-idle (which can hang on live bookmaker pages) and has bounded navigation/wait times across two endpoints.
+
+
+## Hollywoodbets correction update (v30)
+
+- Bet ID JSON parsing now prioritizes the current/selection decimal price instead of taking the largest value across current, previous, original or boosted odds fields. This prevents an old/boosted price being attached to the right fixture.
+- Screenshot OCR compares standard block recognition with sparse-layout recognition and keeps the fuller text result, which helps slips where team names are separated into columns or stacked.
+- Analyzed legs now show both extracted team names explicitly beneath the editable fixture name.
+- App build and service-worker cache versions are bumped so browsers fetch the corrected files.
+
+
+## Hollywoodbets OCR display correction (v32)
+- Hollywoodbets fixture parsing now stores home_team and away_team separately when a fixture is recognised.
+- Analysed slip cards render the structured team pair instead of depending solely on splitting the display string.
+- Service-worker cache key incremented to v12 so browsers fetch the updated app.js.
+- Run `node tests/test_hwb_parse.js` to execute the Hollywoodbets parser regression tests.

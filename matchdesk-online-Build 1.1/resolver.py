@@ -303,6 +303,9 @@ def _isolate_slip_lines(lines):
     selections, prefers the block that has exactly that many legs."""
     lines = [l for l in lines
              if not any(j in l.lower() for j in _SLIP_JUNK)]
+    hwb = _isolate_hwb_slip(lines)
+    if hwb:
+        return hwb, True
     declared = None
     for l in lines:
         m = re.match(r"(?i)^(\d{1,2})\s*(?:selections?|legs?)\b", l)
@@ -331,9 +334,25 @@ def _isolate_slip_lines(lines):
             for n, chunk in cands:
                 if n == declared:
                     return "\n".join(chunk), True
-        # otherwise the block with the fewest stray legs that is still non-empty
-        # is almost always the slip itself; take the first one on the page
-        return "\n".join(cands[0][1]), True
+            merged, total = [], 0
+            for n, chunk in cands:
+                if merged:
+                    merged.append("")
+                merged.extend(chunk)
+                total += n
+                if total >= declared:
+                    break
+            if total:
+                return "\n".join(merged), True
+        if len(cands) >= 2 and all(n == 1 for n, _ in cands) and len(cands) <= 12:
+            merged = []
+            for n, chunk in cands:
+                if merged:
+                    merged.append("")
+                merged.extend(chunk)
+            return "\n".join(merged), True
+        best = max(cands, key=lambda x: x[0])
+        return "\n".join(best[1]), True
 
     # No footer structure found: if the page says how many legs there are,
     # take just that many name/odds pairs starting at the first one.
@@ -350,6 +369,83 @@ def _isolate_slip_lines(lines):
         return "\n".join(out[max(0, first - 1):]), True
 
     return "\n".join(lines), False
+
+_HWB_HEAD_RE = re.compile(
+    r"(?i)^(?:full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|"
+    r"double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|"
+    r"btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|"
+    r"correct\s*score|half\s*time)\s*[-–—:]"
+)
+
+def _isolate_hwb_slip(lines):
+    """Keep every Hollywoodbets market heading through to the slip footer."""
+    heads = [i for i, l in enumerate(lines) if _HWB_HEAD_RE.match(l)]
+    if len(heads) < 1:
+        return None
+    start = heads[0]
+    end = len(lines)
+    for i, l in enumerate(lines):
+        if i > start and len(l) < 60 and _SLIP_END_RE.match(l):
+            end = i
+            break
+    chunk = lines[start:end]
+    if len(heads) >= 2 or _count_anchor_legs(chunk) >= 2:
+        return "\n".join(chunk)
+    return None
+
+def _page_slip_text(page, body):
+    """Collect slip text from every matching container, not just the first."""
+    chunks = [body] if body else []
+    selectors = (
+        "[class*='betslip']", "[class*='BetSlip']", "[class*='bet-slip']",
+        "[class*='BetCode']", "[class*='bet-code']", "[class*='ticket']",
+        "[class*='booking']", "[class*='share']", "[id*='betslip']",
+        "[class*='selection']", "[class*='Selection']",
+        "[data-testid*='betslip']", "[data-testid*='selection']",
+        "[class*='leg']", "[class*='Leg']",
+        "main", "[role='main']",
+    )
+    try:
+        for sel in selectors:
+            try:
+                loc = page.locator(sel)
+                n = loc.count()
+            except Exception:
+                continue
+            for i in range(min(n, 24)):
+                try:
+                    chunk = loc.nth(i).inner_text(timeout=1500) or ""
+                except Exception:
+                    continue
+                if len(re.findall(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", chunk)) >= 1:
+                    chunks.append(chunk)
+    except Exception:
+        pass
+    scored = []
+    for c in chunks:
+        n = len(re.findall(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", c))
+        scored.append((n, len(c), c))
+    if not scored:
+        return body
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    best_n, _, best = scored[0]
+    cards = []
+    seen = set()
+    for n, ln, c in scored:
+        if n < 1 or ln > 1200:
+            continue
+        key = re.sub(r"\s+", " ", c).strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if _HWB_HEAD_RE.search(c) or re.search(r"(?i)\s(?:vs\.?|v\.?)\s", c):
+            cards.append(c.strip())
+    if best_n <= 1 and len(cards) >= 2:
+        return "\n\n".join(cards)
+    hwb = _isolate_hwb_slip(
+        [re.sub(r"[ \t]+", " ", ln).strip() for ln in best.splitlines() if ln.strip()]
+    )
+    return hwb or best
 
 def _scrape_slip_with_playwright(url, timeout_ms=22000):
     """Open a bookmaker share/results page headlessly and pull visible slip text.
@@ -422,21 +518,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=22000):
                     pass
                 page.wait_for_timeout(500)
                 body = page.inner_text("body") or body
-                # Prefer denser slip containers when present
-                for sel in (
-                    "[class*='betslip']", "[class*='BetSlip']", "[class*='bet-slip']",
-                    "[class*='booking']", "[class*='share']", "[id*='betslip']",
-                    "main", "[role='main']",
-                ):
-                    try:
-                        loc = page.locator(sel)
-                        if loc.count() > 0:
-                            chunk = loc.first.inner_text(timeout=2000) or ""
-                            if len(re.findall(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", chunk)) >= 1:
-                                body = chunk
-                                break
-                    except Exception:
-                        pass
+                body = _page_slip_text(page, body)
             finally:
                 try:
                     browser.close()
@@ -467,7 +549,11 @@ def _scrape_slip_with_playwright(url, timeout_ms=22000):
 
     # Cut the page down to ONLY the booked slip (the page also carries other
     # matches, promos, menus ... which used to be read as extra legs).
-    text, isolated = _isolate_slip_lines(lines)
+    hwb = _isolate_hwb_slip(lines)
+    if hwb:
+        text, isolated = hwb, True
+    else:
+        text, isolated = _isolate_slip_lines(lines)
 
     # Require at least one decimal odds-looking number
     if len(re.findall(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", text)) < 1:
@@ -481,6 +567,433 @@ def _scrape_slip_with_playwright(url, timeout_ms=22000):
     return text, ("Loaded via browser, but the slip could not be separated from the rest "
                   "of the page — extra matches may appear. Delete anything that is not "
                   "your slip, then click Analyze.")
+
+def _hwb_odds(val):
+    """Decimal odds; Hollywoodbets often prints profit (0.45 => 1.45)."""
+    if val is None or val == "":
+        return 0.0
+    if isinstance(val, dict):
+        # A nested odds object can carry both current and stale/boosted prices.
+        # Return the first valid value in a deliberate priority order.
+        for k in ("decimalOdds", "decimalPrice", "currentOdds",
+                  "currentPrice", "selectionOdds", "price", "odds",
+                  "decimal", "value", "current", "display", "win"):
+            if k in val:
+                o = _hwb_odds(val[k])
+                if o > 1.0:
+                    return o
+        for k, v in val.items():
+            kl = str(k).lower()
+            if any(x in kl for x in ("old", "previous", "original", "boost",
+                                     "american", "fraction", "opening")):
+                continue
+            if isinstance(v, (dict, list, int, float, str)):
+                o = _hwb_odds(v)
+                if o > 1.0:
+                    return o
+        return 0.0
+    if isinstance(val, list):
+        best = 0.0
+        for v in val:
+            o = _hwb_odds(v)
+            if o > best:
+                best = o
+        return best
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        v = float(val)
+    else:
+        s = str(val).strip().replace(",", ".").replace("x", "").replace("X", "").replace("×", "")
+        s = re.sub(r"[^0-9.]+", "", s)
+        try:
+            v = float(s)
+        except Exception:
+            return 0.0
+    if v <= 0 or v > 500:
+        return 0.0
+    if v <= 1.0:
+        v = v + 1.0
+    return round(v, 2)
+
+def _hwb_str(*vals):
+    for v in vals:
+        if v is None:
+            continue
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            continue
+        s = str(v).strip()
+        if s and s.lower() not in ("none", "null", "undefined"):
+            return s
+    return ""
+
+def _hwb_looks_like_leg(d):
+    if not isinstance(d, dict):
+        return False
+    keys = {str(k).lower() for k in d.keys()}
+    has_odds = bool(keys & {
+        "odds", "price", "decimalodds", "decimal_odds", "decimalprice",
+        "pricevalue", "oddvalue", "fixedodds", "winodds", "selectionodds",
+        "currentodds", "displayodds", "priceamerican", "decimal",
+    })
+    if not has_odds:
+        for k, v in d.items():
+            lk = str(k).lower()
+            if "odd" in lk or lk in ("price", "decimal"):
+                if _hwb_odds(v) > 1.0:
+                    has_odds = True
+                    break
+    has_sel = bool(keys & {
+        "selection", "selectionname", "selectiontext", "outcome", "outcomename",
+        "pick", "betname", "choice", "competitor", "playername",
+    })
+    has_mkt = bool(keys & {
+        "market", "marketname", "markettype", "bettype", "markettext",
+    })
+    has_ev = bool(keys & {
+        "event", "eventname", "match", "matchname", "fixture", "fixturename",
+        "eventdescription", "game", "meeting",
+    })
+    return has_odds and (has_sel or has_mkt or has_ev)
+
+def _hwb_leg_from_dict(d):
+    if not isinstance(d, dict):
+        return None
+    low = {str(k).lower(): v for k, v in d.items()}
+
+    def grab(*names):
+        for n in names:
+            if n in low and low[n] not in (None, ""):
+                return low[n]
+        for n in names:
+            for k, v in low.items():
+                if n in k and v not in (None, ""):
+                    return v
+        return None
+
+    # Do not take the maximum across every odds-like field. Share-page JSON can
+    # contain current, original, boosted, display and historical prices together;
+    # max() silently attaches the wrong price to an otherwise-correct selection.
+    odds = 0.0
+    preferred = (
+        "decimalodds", "decimalprice", "currentodds", "currentprice",
+        "selectionodds", "selectionprice", "odds", "price", "decimal",
+    )
+    for key in preferred:
+        if key in low:
+            odds = _hwb_odds(low[key])
+            if odds > 1.0:
+                break
+    if odds <= 1.0:
+        candidates = []
+        for key, val in low.items():
+            if not any(x in key for x in ("odd", "price", "decimal")):
+                continue
+            if any(x in key for x in (
+                "american", "fraction", "boost", "old", "previous",
+                "original", "opening", "starting", "was", "max",
+            )):
+                continue
+            value = _hwb_odds(val)
+            if value > 1.0:
+                candidates.append((key, value))
+        # Prefer current/live/selection fields, then the first stable source key.
+        candidates.sort(key=lambda item: (
+            0 if any(x in item[0] for x in ("current", "selection", "decimal")) else 1,
+            item[0],
+        ))
+        odds = candidates[0][1] if candidates else 0.0
+    if odds <= 1.0:
+        return None
+    home = _hwb_str(grab("hometeam", "home", "teamhome", "homecompetitor"))
+    away = _hwb_str(grab("awayteam", "away", "teamaway", "awaycompetitor"))
+    match = _hwb_str(
+        grab("eventname", "event", "matchname", "match", "fixture",
+             "fixturename", "eventdescription", "game")
+    )
+    if home and away:
+        match = f"{home} - {away}"
+    elif match:
+        match = re.sub(r"\s+vs\.?\s+", " - ", match, flags=re.I)
+        match = re.sub(r"\s+v\.?\s+", " - ", match, flags=re.I)
+    sel = _hwb_str(
+        grab("selectionname", "selection", "outcomename", "outcome",
+             "pick", "betname", "choice", "selectiontext")
+    )
+    mkt = _hwb_str(
+        grab("marketname", "market", "bettype", "markettype", "markettext")
+    )
+    if not sel and mkt:
+        sel = mkt
+    if not sel:
+        sel = "Selection"
+    if not match:
+        match = "Unknown"
+    return {
+        "selection": sel, "odds": odds,
+        "market": mkt or "1X2", "match": match, "kickoff": "",
+        "sub_legs": [], "is_build_a_bet": False,
+        "bookmaker": "Hollywoodbets",
+    }
+
+def _hwb_collect_legs(obj, seen=None):
+    if seen is None:
+        seen = set()
+    legs = []
+    if id(obj) in seen:
+        return legs
+    try:
+        seen.add(id(obj))
+    except Exception:
+        pass
+    if isinstance(obj, dict):
+        if _hwb_looks_like_leg(obj):
+            leg = _hwb_leg_from_dict(obj)
+            if leg:
+                legs.append(leg)
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                legs.extend(_hwb_collect_legs(v, seen))
+    elif isinstance(obj, list):
+        dicts = [x for x in obj if isinstance(x, dict)]
+        if dicts and sum(1 for x in dicts if _hwb_looks_like_leg(x)) >= 2:
+            for x in dicts:
+                leg = _hwb_leg_from_dict(x)
+                if leg:
+                    legs.append(leg)
+        else:
+            for x in obj:
+                if isinstance(x, (dict, list)):
+                    legs.extend(_hwb_collect_legs(x, seen))
+    return legs
+
+def _hwb_dedupe_legs(legs):
+    out, seen = [], set()
+    for leg in legs:
+        key = (
+            (leg.get("match") or "").lower(),
+            (leg.get("selection") or "").lower(),
+            round(float(leg.get("odds") or 0), 2),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(leg)
+    return out
+
+def _hwb_legs_to_text(legs):
+    lines = ["Hollywoodbets"]
+    for leg in legs:
+        mkt = (leg.get("market") or "1X2").strip()
+        sel = (leg.get("selection") or "Selection").strip()
+        if mkt and sel and not sel.lower().startswith(mkt.lower()):
+            lines.append(f"{mkt} - {sel}")
+        else:
+            lines.append(sel)
+        if leg.get("odds", 0) > 1.0:
+            lines.append(f"{leg['odds']:.2f}")
+        lines.append(leg.get("match") or "Unknown")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+def fetch_hollywoodbets_booking(code, timeout_ms=45000):
+    """Load a Hollywoodbets Bet ID internally.
+
+    Intercepts JSON from the share page so every selection is kept, then
+    falls back to collecting every on-page slip card. Never opens a tab.
+    Returns (legs, slip_text, message). legs == [] on failure.
+    """
+    if not HAS_PLAYWRIGHT:
+        return [], None, (
+            "Hollywoodbets Bet IDs need Playwright on the MatchDesk server. "
+            "Run: pip install playwright && playwright install chromium — "
+            "then restart. Or paste the full slip text and click Analyze."
+        )
+    code = (code or "").strip()
+    if not code:
+        return [], None, "No Hollywoodbets Bet ID."
+    urls = [
+        f"https://www.hollywoodbets.net/betting/{urllib.parse.quote(code)}/code",
+        f"https://new.hollywoodbets.net/betting/{urllib.parse.quote(code)}/code",
+        f"https://www.hollywoodbets.net/betslip/share/{urllib.parse.quote(code)}",
+        f"https://m.hollywoodbets.net/betting/{urllib.parse.quote(code)}/code",
+    ]
+    captured = []
+    last_status = None
+    last_err = ""
+    body = ""
+
+    def on_response(resp):
+        try:
+            st = resp.status
+            url = resp.url or ""
+            ct = (resp.headers.get("content-type") or "").lower()
+            if st == 403:
+                captured.append({"_blocked": True, "url": url})
+                return
+            if st != 200:
+                return
+            interesting = (
+                "json" in ct
+                or any(k in url.lower() for k in (
+                    "betcode", "bet-code", "bet_code", "booking", "share",
+                    "coupon", "ticket", "betslip", "bet-slip", "/code",
+                    "selection", "loadbet", "load-bet", "getbet",
+                ))
+            )
+            if not interesting:
+                return
+            try:
+                data = resp.json()
+            except Exception:
+                return
+            if isinstance(data, (dict, list)):
+                captured.append(data)
+        except Exception:
+            pass
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ],
+            )
+            try:
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-ZA",
+                    viewport={"width": 1280, "height": 1100},
+                    extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
+                )
+                page = context.new_page()
+                page.on("response", on_response)
+                opened = False
+                for url in urls:
+                    try:
+                        resp = page.goto(url, wait_until="domcontentloaded",
+                                         timeout=timeout_ms)
+                        last_status = resp.status if resp else None
+                        if last_status and last_status >= 400 and last_status != 403:
+                            last_err = f"Hollywoodbets replied HTTP {last_status}."
+                            continue
+                        opened = True
+                        page.wait_for_timeout(1800)
+                        for label in (
+                            "Accept", "Accept all", "Accept All", "I agree",
+                            "Got it", "OK", "Allow all", "Agree", "Continue",
+                            "I am 18", "Yes, I am",
+                        ):
+                            try:
+                                btn = page.get_by_role(
+                                    "button", name=re.compile(label, re.I))
+                                if btn.count() > 0:
+                                    btn.first.click(timeout=1500)
+                                    page.wait_for_timeout(800)
+                                    break
+                            except Exception:
+                                pass
+                        try:
+                            page.evaluate(
+                                "window.scrollTo(0, document.body.scrollHeight/2)")
+                            page.wait_for_timeout(600)
+                            page.evaluate("window.scrollTo(0, 0)")
+                        except Exception:
+                            pass
+                        try:
+                            page.wait_for_function(
+                                r"""() => {
+                                    const t = document.body ? document.body.innerText : '';
+                                    return (t.match(/\d{1,3}[.,]\d{2}/g)||[]).length>=2
+                                        || /double\s*chance|full\s*time|vs\.?/i.test(t);
+                                }""",
+                                timeout=8000,
+                            )
+                        except Exception:
+                            pass
+                        page.wait_for_timeout(700)
+                        body = page.inner_text("body") or body
+                        body = _page_slip_text(page, body) or body
+                        if body and len(re.findall(
+                                r"(?<!\d)\d{1,3}[.,]\d{2}(?!\d)", body)) >= 1:
+                            break
+                    except Exception as e:
+                        last_err = f"Could not open Hollywoodbets ({type(e).__name__})."
+                        continue
+                if not opened and not body:
+                    last_err = last_err or "Could not open the Hollywoodbets share page."
+            finally:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as e:
+        return [], None, f"Hollywoodbets lookup failed ({type(e).__name__}: {e})."
+
+    if any(isinstance(x, dict) and x.get("_blocked") for x in captured) and not body:
+        return [], None, (
+            "Hollywoodbets blocked the server request (HTTP 403). "
+            "This is common from cloud hosts. Copy the slip text from the "
+            "Hollywoodbets app or site and use Paste from Clipboard."
+        )
+
+    json_legs = []
+    for data in captured:
+        if isinstance(data, dict) and data.get("_blocked"):
+            continue
+        json_legs.extend(_hwb_collect_legs(data))
+    json_legs = _hwb_dedupe_legs(json_legs)
+    if len(json_legs) >= 1:
+        text = _hwb_legs_to_text(json_legs)
+        _cache_resolved_legs(text, json_legs)
+        n = len(json_legs)
+        return json_legs, text, (
+            f"Loaded {n} Hollywoodbets selection{'s' if n != 1 else ''} from Bet ID {code}."
+        )
+
+    if not body or len(body.strip()) < 20:
+        if last_status == 404:
+            return [], None, (
+                f"Hollywoodbets Bet ID {code} was not found (expired or invalid). "
+                "Confirm the code on Hollywoodbets, or paste the slip text instead."
+            )
+        if last_status == 403:
+            return [], None, (
+                "Hollywoodbets blocked the server request (HTTP 403). "
+                "Copy the slip text from the Hollywoodbets app or site and paste it."
+            )
+        return [], None, last_err or (
+            f"Could not retrieve Hollywoodbets Bet ID {code}. "
+            "The code may be expired, geo-blocked, or the share page changed. "
+            "Paste the slip text instead."
+        )
+
+    try:
+        with open(os.path.join(CONFIG_DIR, "last_booking_scrape.txt"), "w",
+                  encoding="utf-8") as _f:
+            _f.write(body)
+    except Exception:
+        pass
+
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in body.splitlines() if ln.strip()]
+    hwb = _isolate_hwb_slip(lines)
+    text = hwb or _isolate_slip_lines(lines)[0]
+    prices = re.findall(r"(?<!\d)\d{1,3}[.,]\d{2}(?!\d)", text or "")
+    if len(prices) < 1:
+        return [], None, (
+            f"Opened Hollywoodbets Bet ID {code} but found no selection odds. "
+            "The code may be expired or the page layout changed. "
+            "Paste the slip text instead."
+        )
+    return [], text, (
+        f"Loaded Hollywoodbets Bet ID {code} via the share page — "
+        "check every match, then Analyze runs automatically."
+    )
 
 _BETWAY_BRAND_ID = "bd66ebe1-080b-4455-9094-bf0464d4adbf"
 
@@ -728,6 +1241,27 @@ def resolve_booking_code(code, bookie):
             _cache_resolved_legs(btext, legs)
             return btext, ("Loaded from Betway — check the legs; "
                            "Analyze runs automatically.")
+
+    # --- Hollywoodbets: intercept share-page JSON, keep every selection ------
+    hwb_code = bool(re.fullmatch(r"\d{8,14}", code))
+    hwb_url = bool(re.search(r"(?i)hollywoodbets\.net", raw_in or code or ""))
+    if (hwb_code or hwb_url or bookie == "Hollywoodbets") and \
+            bookie in (None, "", "Auto", "Hollywoodbets"):
+        hcode = code
+        if hwb_url and not hwb_code:
+            m = re.search(r"(?i)hollywoodbets\.net/betting/([0-9A-Za-z_-]+)/code", raw_in or code)
+            if m:
+                hcode = m.group(1)
+        legs, htext, hmsg = fetch_hollywoodbets_booking(hcode)
+        if htext:
+            if legs:
+                _cache_resolved_legs(htext, legs)
+            return htext, hmsg
+        if bookie == "Hollywoodbets" or hwb_code:
+            return None, hmsg or (
+                f"Could not retrieve Hollywoodbets Bet ID {hcode}. "
+                "Paste the slip text instead."
+            )
 
     cfg_all = load_bookie_lookup()
     headers_base = {"User-Agent": "Mozilla/5.0 MatchDesk"}

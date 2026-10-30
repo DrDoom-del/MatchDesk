@@ -1,5 +1,5 @@
 'use strict';
-const BUILD='v28b';
+const BUILD='v31-hwb-ocr-merge';
 let _tt;function toast(m){let e=document.getElementById('toast');if(!e){e=document.createElement('div');e.id='toast';e.setAttribute('role','status');document.body.appendChild(e)}e.textContent=m;e.className='show';clearTimeout(_tt);_tt=setTimeout(()=>e.className='',2600)}
 (function selfHeal(){try{if(localStorage.getItem('md_build')===BUILD)return;localStorage.setItem('md_build',BUILD);
  if(!('serviceWorker' in navigator)||!navigator.serviceWorker.controller)return;   // nothing stale is in control
@@ -559,42 +559,113 @@ function junk(l){if(l.is_bab)return false;const s=l.sel.replace(/[\s:]+$/,'').tr
  return isTab(s)||isUp(s)||KICK_RE.test(s)||isFoot(s)||(s.replace(/[^A-Za-z]/g,'').length<2&&l.match==='Unknown')}
 // ---- SA bookmaker parsers, ported from MatchDesk.py ----
 const toF=x=>{if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);return /^\d+(\.\d+)?$/.test(t)&&v>1?v:null};
-const toHW=x=>{/* v5: same as Betway, no +1 */if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);if(!/^\d+(\.\d+)?$/.test(t)||v<=0||v>500)return null;return v<=1?v+1:v};
+const toHW=x=>{if(x==null)return null;let t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×●•]$/,'');if(/^\.\d+$/.test(t))t='0'+t;const v=parseFloat(t);if(!/^\d+(\.\d+)?$/.test(t)||v<=0||v>500)return null;return v<=1?+(v+1).toFixed(2):v};
 const lines0=t=>t.replace(/\r\n?/g,'\n').split('\n').map(l=>l.replace(/[ \t]+/g,' ').trim()).filter(Boolean);
 const mkLeg=(o,b)=>({sub_legs:[],is_bab:false,bookmaker:b,...o});
-function parseHWB(text){
- // Hollywoodbets copied-slip reader. Treat each market heading as the start
- // of a distinct leg and scan forward to its own price + fixture.
- const L=lines0(text).filter(l=>!['×','x','X','•'].includes(l)), legs=[];
- const lead=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)\s*[-–—:]\s*(.+)$/i;
- const foot=/^(multiple(?:\s+accumulator)?|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b)/i;
- const price=/^\d{1,3}[.,]\d{2}\s*[x×●•]?$/i;
- const fixture=l=>/\s(?:vs\.?|v\.?)\s/i.test(l)||/\s[-–—]\s/.test(l);
- const dateLine=l=>/\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(l)||/\d{4}\s*\|/.test(l);
- for(let i=0;i<L.length;i++){
-   const h=L[i].match(lead); if(!h)continue;
-   const marketName=h[1].trim();
-   let pick=h[2].trim(), odds=null, match=null;
-   // Some layouts put the price at the end of the heading/selection.
-   const inline=pick.match(/^(.*?)\s+(\d{1,3}[.,]\d{2})\s*[x×●•]?$/i);
-   if(inline){pick=inline[1].trim();odds=toHW(inline[2]);}
-   // Read only until the next market heading; never let a later leg's
-   // selection, price or fixture overwrite this leg.
-   for(let j=i+1;j<L.length;j++){
-     const line=L[j];
-     if(lead.test(line)||foot.test(line))break;
-     if(!odds && price.test(line)){odds=toHW(line);continue;}
-     if(dateLine(line))continue;
-     if(!match && fixture(line)){
-       match=line.replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ').trim();
-       continue;
-     }
-   }
-   if(pick && match && odds!=null){
-     legs.push(mkLeg({sel:pick,odds,market:classify(marketName)||'1X2',match},'Hollywoodbets'));
-   }
+const HWB_MK='full\\s*time(?:\\s*result)?|match\\s*result|match\\s*winner|1x2|double\\s*chance|draw\\s*no\\s*bet|dnb|total(?:\\s*goals|\\s*corners)?|over|under|btts|both\\s*teams(?:\\s*to\\s*score)?|handicap|asian\\s*handicap|correct\\s*score|half\\s*time|1st\\s*half|2nd\\s*half|win\\s*to\\s*nil|clean\\s*sheet|to\\s*score|odd\\/?even|exact\\s*goals|which\\s*team\\s*to\\s*score|home\\s*or\\s*draw|away\\s*or\\s*draw';
+function hwbNormFix(s){return String(s||'').replace(/^[‘’'"`]+/,'').replace(/[‘’'"`,]+$/,'').replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ').replace(/\s+[-–—]\s+/g,' - ').trim()}
+function hwbIsFix(l){if(!l)return false;if(/^(over|under|total|handicap)\b/i.test(l))return false;return /\s(?:vs\.?|v\.?)\s/i.test(l)||/\s[-–—]\s/.test(l)}
+function hwbIsDate(l){if(hwbIsPrice(l))return false;return/\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(l)||/\d{4}\s*\|/.test(l)||/^\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?(\s+\d{1,2}:\d{2})?$/.test(l)||/^\d{1,2}:\d{2}(\s*(am|pm))?$/i.test(l)}
+function hwbIsPrice(l){const t=String(l||'').trim();return/^(?:[@x×]?\s*)(?:\d{1,3}[.,]\d{2}|\.\d{2})\s*[x×●•]?$/i.test(t)}
+function hwbGoalLine(v){return v===0.5||v===1.5||v===2.5||v===3.5||v===4.5||v===5.5}
+function hwbFlatten(text){
+ const raw=lines0(text).filter(l=>!['×','x','X','•','●'].includes(l));
+ const joined=[];
+ for(let i=0;i<raw.length;i++){
+  if(i+2<raw.length&&/^(?:vs\.?|v\.?)$/i.test(raw[i+1])&&/[A-Za-z]{2}/.test(raw[i])&&/[A-Za-z]{2}/.test(raw[i+2])){
+   joined.push(raw[i]+' vs '+raw[i+2]);i+=2;continue}
+  if(i+1<raw.length&&/^(?:vs\.?|v\.?)\s+\S/i.test(raw[i+1])&&/[A-Za-z]{2}/.test(raw[i])&&!hwbIsFix(raw[i])){
+   joined.push(raw[i]+' '+raw[i+1]);i++;continue}
+  joined.push(raw[i]);
  }
- return legs.length?legs:null;
+ const lead=new RegExp('^('+HWB_MK+')\\s*[-–—:]\\s*(.+)$','i');
+ const mkOnly=new RegExp('^('+HWB_MK+')$','i');
+ const foot=/^(multiple(?:\s+accumulator)?|accumulator|bonus|final\s*odds|total\s*odds|stake|potential|payout|simulate|real\b|bet\s*now|place\s*bet)/i;
+ const out=[];
+ for(const orig of joined){
+  let line=orig.replace(/[‐‑‒–—]/g,'-');
+  if(foot.test(line)&&out.length)break;
+  if(hwbIsDate(line))continue;
+  let rest=line;
+  const mashed=rest.match(new RegExp('^('+HWB_MK+')\\s*[-–—:]\\s*(.+)$','i'));
+  if(mashed){
+   let pick=mashed[2].trim(),odds=null,fix=null;
+   const pm=pick.match(/^(.*?)\s+(\d{0,3}[.,]\d{2}|\.\d{2})\s*[x×●•]?\s*(.*)$/i);
+   if(pm&&!(hwbGoalLine(parseFloat(String(pm[2]).replace(',','.')))&&/over|under|total/i.test(mashed[1]+' '+pick))){pick=pm[1].trim();odds=pm[2];fix=(pm[3]||'').trim()}
+   out.push(mashed[1].trim()+' - '+pick);
+   if(odds)out.push(odds);
+   if(fix){if(hwbIsFix(fix))out.push(hwbNormFix(fix));else if(fix)out.push(fix)}
+   continue;
+  }
+  const tail=rest.match(/^(.*[A-Za-z].*?)\s+(\d{0,3}[.,]\d{2}|\.\d{2})\s*[x×●•]?\s*$/);
+  if(tail&&!hwbIsFix(rest)&&!mkOnly.test(rest)){out.push(tail[1].trim());out.push(tail[2]);continue}
+  const fx=rest.match(/^(.*?)(\S.{1,40}?\s+(?:vs\.?|v\.?)\s+\S.{1,40})$/i);
+  if(fx&&fx[1].trim()&&lead.test(fx[1].trim())){out.push(fx[1].trim());out.push(hwbNormFix(fx[2]));continue}
+  out.push(line);
+ }
+ return out;
+}
+function parseHWB(text){
+ const L=hwbFlatten(text),legs=[];
+ const lead=new RegExp('^('+HWB_MK+')\\s*[-–—:]\\s*(.+)$','i');
+ const mkOnly=new RegExp('^('+HWB_MK+')$','i');
+ const foot=/^(multiple(?:\s+accumulator)?|accumulator|bonus|final\s*odds|total\s*odds|stake|potential|payout|simulate|real\b|bet\s*now|place\s*bet)/i;
+ const starts=[];
+ for(let i=0;i<L.length;i++){
+  if(lead.test(L[i])||mkOnly.test(L[i]))starts.push(i);
+ }
+ const takeBlock=(i,end)=>{
+  const h=L[i].match(lead); let marketName,pick=null,odds=null,match=null;
+  if(h){marketName=h[1].trim();pick=h[2].trim();
+   const inline=pick.match(/^(.*?)\s+(\d{0,3}[.,]\d{2}|\.\d{2})\s*[x×●•]?$/i);
+   if(inline){pick=inline[1].trim();odds=toHW(inline[2]);}
+  }else{const m=L[i].match(mkOnly);if(!m)return null;marketName=m[1].trim()}
+  for(let j=i+1;j<end;j++){
+   const line=L[j];
+   if(foot.test(line))break;
+   if(!odds&&hwbIsPrice(line)){
+    const o=toHW(line);
+    if(o!=null&&!(hwbGoalLine(o)&&/total|over|under/i.test(marketName+(pick||''))))odds=o;
+    continue}
+   if(hwbIsDate(line))continue;
+   if(!match&&hwbIsFix(line)){match=hwbNormFix(line);continue}
+   if(!pick&&!hwbIsFix(line)&&!hwbIsPrice(line)&&!mkOnly.test(line)&&!lead.test(line)){pick=line;continue}
+  }
+  if(!match){
+   for(let j=i-1;j>=Math.max(0,i-6);j--){
+    if(lead.test(L[j])||mkOnly.test(L[j]))break;
+    if(hwbIsFix(L[j])){match=hwbNormFix(L[j]);break}
+   }
+  }
+  if(!pick)pick=marketName;
+  if(!pick||odds==null)return null;
+  const fixture=match||'Unknown',pair=fixture==='Unknown'?[null,null]:fixture.split(/\s+(?:-|–|—|vs\.?|v\.?)\s+/i);
+  return mkLeg({sel:pick,odds,market:classify(marketName)||'1X2',match:fixture,
+   home_team:pair&&pair.length>=2?pair[0].trim():null,
+   away_team:pair&&pair.length>=2?pair.slice(1).join(' - ').trim():null},'Hollywoodbets');
+ };
+ for(let s=0;s<starts.length;s++){
+  const end=s+1<starts.length?starts[s+1]:L.length;
+  const leg=takeBlock(starts[s],end);
+  if(leg)legs.push(leg);
+ }
+ if(legs.length>=2){
+  for(let i=0;i<legs.length;i++){
+   if(legs[i].match&&legs[i].match!=='Unknown')continue;
+   const nxt=legs.slice(i+1).find(x=>x.match&&x.match!=='Unknown');
+   const prv=legs.slice(0,i).reverse().find(x=>x.match&&x.match!=='Unknown');
+   if(nxt&&(!prv||i===0))legs[i].match=nxt.match;
+   else if(prv)legs[i].match=prv.match;
+  }
+ }
+ const named=legs.filter(l=>l.match&&l.match!=='Unknown');
+ if(named.length>=1&&legs.length>named.length){
+  const unused=named.map(l=>l.match);
+  legs.forEach((l,i)=>{if(l.match==='Unknown'&&unused[i])l.match=unused[i]});
+ }
+ const seen=new Set(),uniq=[];
+ for(const l of legs){const k=(l.match||'')+'|'+(l.sel||'')+'|'+(l.odds||'');if(seen.has(k))continue;seen.add(k);uniq.push(l)}
+ return uniq.length?uniq:null;
 }
 function sim(a,b){a=a.toLowerCase().replace(/[^a-z0-9]/g,'');b=b.toLowerCase().replace(/[^a-z0-9]/g,'');if(!a||!b)return 0;
  const d=Array.from({length:a.length+1},(_,i)=>[i,...Array(b.length).fill(0)]);for(let j=1;j<=b.length;j++)d[0][j]=j;
@@ -664,10 +735,11 @@ function parseSporting(text){
  return legs.length?legs:null}
 function detectBookie(t){const lo=t.toLowerCase();
  // Cropped Hollywoodbets screenshots often omit the bookmaker logo/header.
- const hwHead=(t.match(/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|1x2)\s*[-–—:]/gim)||[]).length;
- const hwFixtures=(t.match(/^.+?\s+(?:vs\.?|v\.?)\s+.+$/gim)||[]).length;
- const hwPrices=(t.match(/^\s*\d{1,3}[.,]\d{2}\s*[x×]?\s*$/gim)||[]).length;
- if(hwHead>=1&&hwFixtures>=1&&(hwPrices>=1||/multiple\s+accumulator|final\s+odds|betslip/i.test(t))&&!/build a bet|betway/i.test(lo))return 'Hollywoodbets';
+ const hwHead=(t.match(/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|draw\s*no\s*bet|btts|both\s*teams)\s*[-–—:]/gim)||[]).length;
+ const hwMkLine=(t.match(/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|1x2)$/gim)||[]).length;
+ const hwFixtures=(t.match(/^.+?\s+(?:vs\.?|v\.?)\s+.+$/gim)||[]).length+(t.match(/^.+?\s[-–—]\s.+$/gm)||[]).length;
+ const hwPrices=(t.match(/^\s*[@x×]?\s*\d{0,3}[.,]\d{2}\s*[x×]?\s*$/gim)||[]).length;
+ if((hwHead>=1||hwMkLine>=1)&&hwFixtures>=1&&(hwPrices>=1||hwHead>=2||/multiple\s+accumulator|final\s+odds|betslip|hollywood/i.test(t))&&!/build a bet|betway/i.test(lo))return 'Hollywoodbets';
  if(/\b1x2\b/.test(lo)&&/\d{4}-\d{2}-\d{2}/.test(t)&&(lo.includes('multibet')||lo.includes('total odds')||lo.includes('potential return')))return '10Bet';
  if(!lo.includes('betway')&&!lo.includes('build a bet')&&(lo.includes('1x2:')||/\b1x2\s*[12x]\b/.test(lo)||/\b1x2[12x]\b/.test(lo)||/\btotal\s*\(\d/.test(lo))&&(/\s[-–—]\s/.test(t)||lo.includes('supabets')||lo.includes('combined multiple')))return 'Supabets';
  {const mk=['draw no bet','match result -','match result','2up','legs selected','share my bet','(ep)'].filter(w=>lo.includes(w)).length+(/(^|\n)ep(\n|$)/.test(lo)?1:0);
@@ -679,10 +751,10 @@ const SPEC={Hollywoodbets:parseHWB,'10Bet':parse10Bet,Supabets:parseSupa,Sportin
 function parse(text){
  const bk=detectBookie(text),clean=cleanBetway(text);
  // Prefer the dedicated Hollywoodbets leg reader for cropped slip screenshots.
- if(bk==='Hollywoodbets'||/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|1x2)\s*[-–—:]/im.test(text)){
-  for(const t of [text,clean]){let g;try{g=parseHWB(t)}catch{}
-   g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)return g}
- }
+  if(bk==='Hollywoodbets'||/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|draw\s*no\s*bet)\s*[-–—:]/im.test(text)||(/hollywood/i.test(text)&&hwbFlatten(text).length>=4)){
+   for(const t of [text,clean]){let g;try{g=parseHWB(t)}catch{}
+    g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)return g}
+  }
  if(SPEC[bk]&&bk!=='Hollywoodbets'){for(const t of [text,clean]){let g;try{g=SPEC[bk](t)}catch{}
   g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)return g}}
  let L=stripTabs(clean.split('\n').map(x=>x.trim()).filter(Boolean));
@@ -718,7 +790,16 @@ function totalCheck(prod,text){
  return Math.abs(prod-t)/t<=.015?`<div class="ok">✔ Legs multiply to ${prod.toFixed(2)}, matching the slip's own total of ${t.toFixed(2)}.</div>`
   :`<div class="card"><span class="flag">⚠ Legs multiply to ${prod.toFixed(2)} but the slip says ${t.toFixed(2)}. A leg or price may be missing or misread – check the text on the left.</span></div>`}
 let lastLegs=[],lastCombos=[],lastTarget=5,shown=PAGE,lastText='';
-const teamsOf=m=>{const p=String(m||'').split(/\s+(?:-|–|—|vs\.?|v\.?)\s+/i);return p.length>=2&&p[0].trim()&&p[1].trim()&&String(m).toLowerCase()!=='unknown'?[p[0].trim(),p.slice(1).join(' - ').trim()]:[null,null]};
+const teamsOf=m=>{
+ // Prefer explicit structured team fields when a bookmaker parser supplied them.
+ if(m&&typeof m==='object'&&m.home_team&&m.away_team)return[String(m.home_team).trim(),String(m.away_team).trim()];
+ // Parsed legs are objects; the fixture is in .match, not String(object).
+ // String(object) becomes "[object Object]" and hides both team names in the UI.
+ const raw=String(m&&typeof m==='object'?(m.match??m.fixture??''):m||'').trim();
+ if(!raw||raw.toLowerCase()==='unknown')return[null,null];
+ const p=raw.split(/\s+(?:-|–|—|vs\.?|v\.?)\s+/i);
+ return p.length>=2&&p[0].trim()&&p.slice(1).join(' - ').trim()?[p[0].trim(),p.slice(1).join(' - ').trim()]:[null,null]
+};
 const alias=n=>ALIASES[(n||'').toLowerCase().trim()]||n;
 function dataConf(l){
  const S=l._form_support||[],F=l._form_flags||[],src=l._src?' ('+l._src+')':'';
@@ -755,7 +836,9 @@ function renderLegs(){
  el.innerHTML=`<h3>Detected ${lastLegs.length} leg(s)</h3><p class="muted">Reader: ${detectBookie(lastText)}</p>`+lastLegs.map((l,li)=>{
   if(!(l.odds>1))return `<div class="card"><b>${esc(l.match)}</b><br>${esc(l.sel)} <div class="flag">⚠ Price read as ${l.odds} – not valid decimal odds, so this leg is ignored. Check the slip.</div></div>`;
   const p=fair(l),[rt,rc]=legRisk(p),low=window._lowLines&&l.match.split(/\s-\s/).some(n=>window._lowLines.has(n.trim()));
-  return `<div class="card"><input class="nm" value="${esc(l.match)}" onchange="renameLeg(${li},this.value)" title="Tap to edit the match name">${low?' <span class="flag">⚠ name may be misread – tap to fix</span>':''}<br>${esc(l.sel)} <span class="muted">(${esc(l.market)})</span> @ <b>${l.odds.toFixed(2)}</b>
+  const pair=teamsOf(l).filter(Boolean);
+  const pairHtml=pair.length===2?`<div class="muted" style="margin:4px 0 2px">Teams: <b>${esc(pair[0])}</b> vs <b>${esc(pair[1])}</b></div>`:'';
+  return `<div class="card"><input class="nm" value="${esc(l.match)}" onchange="renameLeg(${li},this.value)" title="Tap to edit the match name">${low?' <span class="flag">⚠ name may be misread – tap to fix</span>':''}${pairHtml}<br>${esc(l.sel)} <span class="muted">(${esc(l.market)})</span> @ <b>${l.odds.toFixed(2)}</b>
   ${l.is_bab?`<div class="muted">${l.sub_legs.map(esc).join('<br>')}</div>`:''}
   <div class="bar"><i style="width:${p*100}%;background:var(${rc})"></i></div><span class="tag" style="background:var(${rc})">${rt}</span> <span class="muted">fair ≈ ${(p*100).toFixed(1)}% · margin ${marginPct(l).toFixed(0)}%${typeof l._form_adj==='number'&&l._form_adj?` · form ${l._form_adj>0?'+':''}${(l._form_adj*100).toFixed(1)}%`:''}</span>${exHtml(l,li)}</div>`}).join('')
   +totalCheck(tot,lastText)+`<div class="card">Whole slip: <b>${tot.toFixed(2)}</b> odds · fair ≈ ${(tp*100).toFixed(2)}%${w?`<div class="flag">Weakest: ${esc(w)}</div>`:''}</div>`
@@ -888,13 +971,20 @@ window.renameLeg=(i,v)=>{lastLegs[i].match=v.trim()||'Unknown';enrichLegs(lastLe
 // ---------- screenshot import (OCR in the browser, Tesseract) ----------
 function ocrClean(t){
  return t.split('\n').map(l=>{l=l.trim();
-  if(/^[x×]2$/i.test(l))return '1X2';                                   // "1X2" loses its leading 1
-  l=l.replace(/(?<![\w])x2([12x])(?=\s)/i,'1x2$1');                      // "x21 150" -> "1x21 150"
+  if(/^[x×]2$/i.test(l))return '1X2';
+  l=l.replace(/(?<![\w])x2([12x])(?=\s)/i,'1x2$1');
   l=l.replace(/(\d[.,]?\d{2})\s*[§®©xX×B●•]\s*$/,'$1');
-  l=l.replace(/[‐‑‒–—]/g,'-');                    // stray chip symbols after the price
-  if(/[A-Za-z]{3}/.test(l)&&!/\d{1,2}:\d{2}|\d{4}/.test(l))               // dropped decimal: "Al-Masry 141" -> 1.41
-   l=l.replace(/(\s)([1-9])(\d{2})(?=\s*(?:[xX×]|$))/,(m,a,b,c)=>`${a}${b}.${c}`);
+  l=l.replace(/[‐‑‒–—]/g,'-');
+  // Hollywoodbets headings are often read with a tilde instead of the separator.
+  l=l.replace(/^(full\s*time(?:\s*result)?|double\s*chance|match\s*result|match\s*winner|draw\s*no\s*bet)\s*[~|:]\s*/i,'$1 - ');
+  // OCR commonly joins the words in the Double Chance selection.
+  l=l.replace(/\b([A-Za-z]{2,})\s*ORDRAW\b/i,'$1 OR DRAW');
+  // A standalone three-digit price such as 130 is frequently a lost decimal (1.30).
+  if(/^\d{3}$/.test(l)&&Number(l)>=101&&Number(l)<=500)l=l[0]+'.'+l.slice(1);
+  if(/[A-Za-z]{3}/.test(l)&&! /\d{1,2}:\d{2}|\d{4}/.test(l))
+   l=l.replace(/(\s)([1-9])(\d{2})(?=\s*(?:[xX×]|$))/,'$1$2.$3');
   return l}).filter(Boolean).join('\n')}
+
 let tessP;const loadTess=()=>tessP||(tessP=new Promise((ok,no)=>{const e=document.createElement('script');
  e.src='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';e.onload=ok;
  e.onerror=()=>{tessP=null;no(new Error('Could not load the OCR engine. Are you online?'))};document.head.appendChild(e)}));
@@ -911,8 +1001,36 @@ async function importImage(file){
  const st=$('#ocrst');if(!file||!file.type.startsWith('image/')){st.textContent='That is not an image file.';return}
  try{st.textContent='Loading OCR engine (first time downloads about 10 MB)…';await loadTess();
   const cv=await prepImage(file),w=await Tesseract.createWorker('eng',1,{logger:m=>{if(m.status==='recognizing text')st.textContent='Reading image… '+Math.round(m.progress*100)+'%'}});
-  await w.setParameters({tessedit_pageseg_mode:'6'});const r=await w.recognize(cv);await w.terminate();
-  const text=ocrClean(r.data.text),cf=Math.round(r.data.confidence);window._lowLines=new Set((r.data.lines||[]).filter(l=>l.confidence<75).map(l=>ocrClean(l.text).trim()));$('#slip').value=text;
+  // Run two segmentation modes. Hollywoodbets uses small, separated cards;
+  // PSM 11 usually recovers the fixture rows while PSM 6 may recover headings.
+  await w.setParameters({tessedit_pageseg_mode:'6'});
+  const r6=await w.recognize(cv);
+  await w.setParameters({tessedit_pageseg_mode:'11'});
+  const r11=await w.recognize(cv);
+  await w.terminate();
+  const textOf=r=>ocrClean(r.data.text||'');
+  const quality=t=>{
+   const fixtures=(t.match(/^.*\b(?:vs\.?|v\.?)\s+.*$/gim)||[]).length;
+   const headers=(t.match(/^(?:full\s*time(?:\s*result)?|double\s*chance|match\s*result|match\s*winner|draw\s*no\s*bet)\b/gim)||[]).length;
+   const prices=(t.match(/^\s*(?:\d{1,3}[.,]\d{2}|\.\d{2})\s*$/gm)||[]).length;
+   const words=(t.match(/[A-Za-z]{3,}/g)||[]).length;
+   return fixtures*100+headers*25+prices*8+words;
+  };
+  // Prefer the OCR pass that actually recovered the fixtures and selection
+  // headers, not the pass that merely produced more stray text.
+  const t6=textOf(r6),t11=textOf(r11);
+  const use11=quality(t11)>=quality(t6),r=use11?r11:r6;
+  let text=use11?t11:t6;
+  // If the other pass contributes a fixture missing from the chosen pass,
+  // append that fixture so the parser can associate it with its nearby leg.
+  const other=use11?t6:t11;
+  const fixtureLines=other.split('\n').filter(l=>/\b(?:vs\.?|v\.?)\s+\S/i.test(l));
+  for(const line of fixtureLines){
+   const key=line.toLowerCase().replace(/[^a-z0-9]/g,'');
+   const present=text.split('\n').some(x=>x.toLowerCase().replace(/[^a-z0-9]/g,'').includes(key)||key.includes(x.toLowerCase().replace(/[^a-z0-9]/g,'')));
+   if(!present)text+='\n'+line;
+  }
+  const cf=Math.round(r.data.confidence);window._lowLines=new Set((r.data.lines||[]).filter(l=>l.confidence<75).map(l=>ocrClean(l.text).trim()));$('#slip').value=text;
   st.innerHTML=`Read from image (confidence ${cf}%). ${cf<60?'<span class="flag">Low confidence – a clearer, larger screenshot helps. </span>':''}Check the text below, fix anything wrong, then press Analyze.`;
   $('#analyze').click()}
  catch(e){st.textContent='Image import failed: '+e.message}}
@@ -945,6 +1063,10 @@ function diagnoseCodeError(msg,code,bookie){
  if(/block|forbidden|403|cloud|datacenter|data.?centre|captcha/i.test(m))return 'The bookmaker may be blocking server requests (common from cloud hosts). Open the bookmaker page yourself, copy the slip text, and use Paste from Clipboard.';
  if(/10bet/i.test(bk)||/10bet/i.test(raw))return '10Bet has no public booking-code page. Copy the slip text from the 10Bet site or app and press Paste & Analyze.';
  if(/sportingbet/i.test(bk)||/sportingbet/i.test(raw))return 'Sportingbet needs the full Share My Bet link, not a short code. Paste the full link, or copy the slip text and press Paste & Analyze.';
+ if(/hollywood/i.test(bk)||/hollywood/i.test(raw)||/\b\d{8,14}\b/.test(raw)){
+  if(/403|block|forbidden/i.test(m))return 'Hollywoodbets blocked the server request. Copy the slip from the Hollywoodbets app or site and use Paste from Clipboard, or import a screenshot.';
+  if(/not found|404|expired|invalid/i.test(m))return 'That Hollywoodbets Bet ID was not found or has expired. Confirm it in the Hollywoodbets app, or paste the slip text instead.';
+ }
  if(/not found|404|unknown|invalid code|no slip/i.test(m))return 'That code was not found or is not supported. Confirm the code is still valid on the bookmaker site, or paste the slip text instead.';
  if(/unsupported|not supported/i.test(m))return 'That bookmaker is not supported for automatic code loading. Paste the slip text or open the bookmaker page and copy it.';
  return msg||'Could not load that code.';
@@ -958,14 +1080,21 @@ async function helperResolve(code,bookie,st){
 async function bookingOpen(){
  const raw=$('#bcode').value.trim(),st=$('#bst');if(!raw){st.textContent='Type or paste a booking code, Bet ID or share link first.';return}
  if(looksLikeSlip(raw)){$('#slip').value=raw;$('#bcode').value='';st.textContent='That looks like a full slip, so I analyzed it directly.';$('#analyze').click();return}
- const hr=await helperResolve(raw,$('#bsite').value,st);
+ const sel=$('#bsite').value;let[code,bk]=extractCode(raw,sel);if(sel!=='Auto')bk=sel;if(bk==='Auto'||!bk)bk=/^BW/i.test(code)?'Betway':(/^\d{8,14}$/.test(code)?'Hollywoodbets':'Auto');
+ const hr=await helperResolve(raw,bk==='Auto'?sel:bk,st);
  if(hr){if(hr.ok&&hr.text){$('#slip').value=hr.text;st.textContent=(hr.message||'Loaded.')+' Analyzed on the right.';$('#analyze').click();
   if(!lastLegs.length)st.innerHTML=`The slip loaded, but I could not read any legs from it. This is what came back:<pre class="raw">${esc(hr.text.slice(0,600))}</pre>Copy this text to me and I will fix the reader.`;return}
-  const diag=diagnoseCodeError(hr.message,raw,$('#bsite').value);
+  const diag=diagnoseCodeError(hr.message,raw,bk);
+  if(bk==='Hollywoodbets'){
+   st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>${esc(diag)}<br><span class="muted">MatchDesk did not open Hollywoodbets in another tab. Copy the slip from the Hollywoodbets app or site and press Paste from Clipboard, or import a screenshot.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
+   helpWireNeed(st);return}
   st.innerHTML=`<b>Could not load automatically</b><br>${esc(diag)}<br><span class="muted">I will try to open the bookmaker page so you can copy the slip instead.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
   helpWireNeed(st)}
- const sel=$('#bsite').value;let[code,bk]=extractCode(raw,sel);if(sel!=='Auto')bk=sel;if(bk==='Auto'||!bk)bk=/^BW/i.test(code)?'Betway':'Auto';
+ else if(bk==='Hollywoodbets'){
+  st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>The MatchDesk server is not reachable, so the Bet ID was not fetched. Start the server (or local helper) and try again, or paste the slip text / import a screenshot. ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
+  helpWireNeed(st);return}
  let urls=/^https?:\/\//i.test(raw)?[raw.match(/https?:\/\/\S+/)[0]]:(SITE[bk]?SITE[bk](code):[]);
+ if(bk==='Hollywoodbets'){st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>Paste the slip text or import a screenshot instead. ${helpNeedBtn('why won’t my booking code load','Need help?')}`;helpWireNeed(st);return}
  if(bk==='10Bet'){st.innerHTML='10Bet has no public booking-code page. Copy the slip text from the 10Bet site or app and press Paste & Analyze. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
  if(bk==='Sportingbet'&&!urls.length){st.innerHTML='Sportingbet uses a Share My Bet link, not a short code. Paste the full link here, or copy the slip text and press Paste & Analyze. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
  if(!urls.length){st.innerHTML='I could not tell which bookmaker that code is from. Pick one from the list, or paste the slip text instead. '+helpNeedBtn('why won’t my booking code load','Need help?');helpWireNeed(st);return}
