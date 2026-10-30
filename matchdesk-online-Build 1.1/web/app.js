@@ -629,6 +629,32 @@ function parseHWBFallback(text){
  }
  return legs.length?legs:null;
 }
+// Strict parser for the Hollywoodbets copied ticket layout. The market, price,
+// selection and fixture are separate lines; do not let a generic parser merge them.
+function parseHWBTicket(text){
+ const L=lines0(text).filter(x=>!['×','x','X','•'].includes(x)),legs=[];
+ const head=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)\s*[-–—:]\s*(.+)$/i;
+ const footer=/^(multiple\s*accumulator|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b|place\s*bet)\b/i;
+ const fixture=x=>/(?:\s+vs\.?\s+|\s+v\.?\s+|\s[-–—]\s)/i.test(x);
+ const date=x=>/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\s*\||^\d{4}\s*\|/.test(x);
+ for(let i=0;i<L.length;i++){
+  const m=L[i].match(head); if(!m) continue;
+  let sel=m[2].trim(), odds=null, match='Unknown';
+  // Some copied tickets append the price to the market/selection line.
+  const tail=sel.match(/^(.*?)\s+(\d{1,3}[.,]\d{2})$/);
+  if(tail){sel=tail[1].trim();odds=toHW(tail[2]);}
+  for(let j=i+1;j<L.length;j++){
+   const c=L[j];
+   if(head.test(c)||footer.test(c))break;
+   if(date(c))continue;
+   if(odds==null && /^\d{1,3}[.,]\d{2}$/.test(c)){odds=toHW(c);continue;}
+   if(fixture(c)){match=c.replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ');break;}
+  }
+  if(sel && !footer.test(sel) && !isUp(sel)) legs.push(mkLeg({sel,odds:odds??0,market:classify(m[1])||'1X2',match},'Hollywoodbets'));
+ }
+ return legs.length?legs:null;
+}
+
 function sim(a,b){a=a.toLowerCase().replace(/[^a-z0-9]/g,'');b=b.toLowerCase().replace(/[^a-z0-9]/g,'');if(!a||!b)return 0;
  const d=Array.from({length:a.length+1},(_,i)=>[i,...Array(b.length).fill(0)]);for(let j=1;j<=b.length;j++)d[0][j]=j;
  for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
@@ -712,7 +738,7 @@ function parse(text){
  if(SPEC[bk]){
   let best=[];
   for(const t of [text,clean]){let g;try{g=SPEC[bk](t)}catch{};g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g}
-  if(bk==='Hollywoodbets'){let g;try{g=parseHWBStructured(text)||parseHWBStructured(clean)}catch{};g=(g||[]).filter(l=>!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g;try{g=parseHWBFallback(text)||parseHWBFallback(clean)}catch{};g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g}
+  if(bk==='Hollywoodbets'){let g;try{g=parseHWBTicket(text)||parseHWBTicket(clean)}catch{};if(g&&g.length>best.length)best=g;try{g=parseHWBStructured(text)||parseHWBStructured(clean)}catch{};g=(g||[]).filter(l=>!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g;try{g=parseHWBFallback(text)||parseHWBFallback(clean)}catch{};g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g}
   if(best.length)return best;
  }
  let L=stripTabs(clean.split('\n').map(x=>x.trim()).filter(Boolean));
