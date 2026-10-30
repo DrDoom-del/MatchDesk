@@ -97,3 +97,13 @@ Support address shown in the app: Matchdesksupport@gmail.com.
 - **Football-Data.org** (optional key in About -> Settings). When a user has saved a key AND both teams are in a league Football-Data covers (see `FD_OF` in `web/app.js`), Football-Data is used first because it also counts cup and European matches. For every other match ESPN is used. If the preferred source has nothing, the other one is tried.
 - A rejected Football-Data key does not break anything: ESPN data is shown with a note.
 - ESPN's endpoints are unofficial and could change; if form details stop appearing for everyone, check the ESPN calls in the browser's network tab first.
+
+
+## Hollywoodbets resolver update (v9)
+
+- Numeric Hollywoodbets Share Bet IDs (8–14 digits) are now attempted through the official Hollywoodbets website's **Load a Bet** workflow using the server-side Playwright browser, before legacy share-URL fallbacks.
+- Hollywoodbets copied-slip parsing now prioritises the dedicated ticket parsers so profit-only prices such as `0.16` are converted to decimal odds `1.16` and are not overwritten by a generic parser.
+- Betway-specific resolution and parsing paths were left unchanged.
+- The service-worker shell cache was bumped to v9 so clients fetch the updated app JavaScript after deployment.
+
+The resolver change is implemented and syntax-checked, but the live Hollywoodbets code `1485945330` could not be verified from this build environment. After deploying, test that ID in MatchDesk; if Hollywoodbets changes its Load a Bet form selectors or requires an authenticated session, the resolver will report a load failure rather than claiming the slip was loaded.
