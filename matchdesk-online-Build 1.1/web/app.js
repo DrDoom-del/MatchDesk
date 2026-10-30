@@ -559,102 +559,43 @@ function junk(l){if(l.is_bab)return false;const s=l.sel.replace(/[\s:]+$/,'').tr
  return isTab(s)||isUp(s)||KICK_RE.test(s)||isFoot(s)||(s.replace(/[^A-Za-z]/g,'').length<2&&l.match==='Unknown')}
 // ---- SA bookmaker parsers, ported from MatchDesk.py ----
 const toF=x=>{if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);return /^\d+(\.\d+)?$/.test(t)&&v>1?v:null};
-const toHW=x=>{/* Hollywoodbets copied slips may show profit-only prices; convert 0.xx to decimal odds by adding 1. */if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);if(!/^\d+(\.\d+)?$/.test(t)||v<=0||v>500)return null;return v<=1?v+1:v};
+const toHW=x=>{/* v5: same as Betway, no +1 */if(x==null)return null;const t=String(x).trim().replace(',','.').replace(/^[@xX×]\s*/,'').replace(/\s*[xX×]$/,'');const v=parseFloat(t);if(!/^\d+(\.\d+)?$/.test(t)||v<=0||v>500)return null;return v<=1?v+1:v};
 const lines0=t=>t.replace(/\r\n?/g,'\n').split('\n').map(l=>l.replace(/[ \t]+/g,' ').trim()).filter(Boolean);
 const mkLeg=(o,b)=>({sub_legs:[],is_bab:false,bookmaker:b,...o});
 function parseHWB(text){
- const L=lines0(text).filter(l=>!['×','x','X','•'].includes(l)),legs=[];
- const lead=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)\s*[-–—:]\s*(.+?)(?:\s+([0-9]+[.,][0-9]{2}))?$/i;
- const foot=/^(multiple|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b)/i,oo=/^[0-9]+[.,][0-9]{2}$/;
- const pull=c=>{const m=c.match(/(?<!\d)(\d{1,3}[.,]\d{2})\s*$/);if(!m)return[null,c];const v=toHW(m[1]);return v==null?[null,c]:[v,c.slice(0,m.index).trim().replace(/^[ \-–—|]+|[ \-–—|]+$/g,'')]};
- for(let i=0;i<L.length;){const m=L[i].match(lead);if(!m){i++;continue}
-  let mk=m[1].trim(),pick=m[2].trim();if(isUp(pick)){i++;continue}
-  let odds=m[3]?toHW(m[3]):null;if(odds==null){const[o2,p2]=pull(pick);if(o2!=null){odds=o2;pick=p2}}
-  let match=null,j=i+1;
-  while(j<L.length&&j<i+6){const c=L[j],lo=c.toLowerCase();if(foot.test(c)||lead.test(c))break;
-   if(oo.test(c.replace(',','.'))){if(odds==null){const v=toHW(c);if(v!=null)odds=v}j++;continue}
-   if(odds==null){const[o2,r]=pull(c);if(o2!=null&&(!r||r.length<=3)){odds=o2;j++;continue}}
-   if((lo.includes(' vs ')||lo.includes(' v ')||/\s[-–—]\s/.test(c))&&!match){match=c.replace(/\s+vs\s+/i,' - ').replace(/\s+v\s+/i,' - ');const[o2,m2]=pull(match);if(o2!=null&&odds==null){odds=o2;match=m2}j++;continue}
-   if(/\d{4}\s*\|/.test(c)||/\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(c)){j++;continue}
-   break}
-  if(pick)legs.push(mkLeg({sel:pick,odds:odds??0,market:classify(mk)||'1X2',match:match||'Unknown'},'Hollywoodbets'));
-  i=Math.max(j,i+1)}
- return legs.length?legs:null}
-// Structured Hollywoodbets parser for the common mobile/share-slip layout.
-// Each market header starts a new leg; scan only until the next market header.
-function parseHWBStructured(text){
- const L=lines0(text),legs=[];
- const head=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)\s*[-–—:]\s*(.+)$/i;
- const footer=/^(multiple\s*accumulator|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b|place\s*bet)\b/i;
- const fixtureLine=x=>/(?:\s+vs\.?\s+|\s+v\.?\s+|\s[-–—]\s)/i.test(x);
+ // Hollywoodbets copied-slip reader. Treat each market heading as the start
+ // of a distinct leg and scan forward to its own price + fixture.
+ const L=lines0(text).filter(l=>!['×','x','X','•'].includes(l)), legs=[];
+ const lead=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)\s*[-–—:]\s*(.+)$/i;
+ const foot=/^(multiple(?:\s+accumulator)?|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b)/i;
+ const price=/^\d{1,3}[.,]\d{2}$/;
+ const fixture=l=>/\s(?:vs\.?|v\.?)\s/i.test(l)||/\s[-–—]\s/.test(l);
+ const dateLine=l=>/\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(l)||/\d{4}\s*\|/.test(l);
  for(let i=0;i<L.length;i++){
-  const m=L[i].match(head); if(!m) continue;
-  const market=classify(m[1])||'1X2'; let sel=m[2].trim(),odds=null,match='Unknown';
-  if(!sel||footer.test(sel)) continue;
-  for(let j=i+1;j<L.length;j++){
-   const c=L[j]; if(head.test(c)||footer.test(c)) break;
-   if(['×','x','X','•'].includes(c)) continue;
-   if(/^(\d{1,3})[.,](\d{2})$/.test(c)){if(odds==null)odds=toHW(c);continue;}
-   if(/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\s*\|/.test(c)||/^\d{4}\s*\|/.test(c))continue;
-   if(fixtureLine(c)){match=c.replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ');continue;}
-  }
-  legs.push(mkLeg({sel,odds:odds??0,market,match},'Hollywoodbets'));
+   const h=L[i].match(lead); if(!h)continue;
+   const marketName=h[1].trim();
+   let pick=h[2].trim(), odds=null, match=null;
+   // Some layouts put the price at the end of the heading/selection.
+   const inline=pick.match(/^(.*?)\s+(\d{1,3}[.,]\d{2})$/);
+   if(inline){pick=inline[1].trim();odds=toHW(inline[2]);}
+   // Read only until the next market heading; never let a later leg's
+   // selection, price or fixture overwrite this leg.
+   for(let j=i+1;j<L.length;j++){
+     const line=L[j];
+     if(lead.test(line)||foot.test(line))break;
+     if(!odds && price.test(line)){odds=toHW(line);continue;}
+     if(dateLine(line))continue;
+     if(!match && fixture(line)){
+       match=line.replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ').trim();
+       continue;
+     }
+   }
+   if(pick && match && odds!=null){
+     legs.push(mkLeg({sel:pick,odds,market:classify(marketName)||'1X2',match},'Hollywoodbets'));
+   }
  }
  return legs.length?legs:null;
 }
-
-// Resilient Hollywoodbets fallback: OCR and mobile copy sometimes split the market,
-// selection, fixture and price onto separate lines or omit the dash after the market.
-function parseHWBFallback(text){
- const L=lines0(text),legs=[];
- const markets=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)(?:\s*[-–—:]\s*|\s+)?(.*)$/i;
- const foot=/^(multiple|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b|place\s*bet)/i;
- const fixture=x=>/(?:\s+vs\.?\s+|\s+v\.?\s+|\s[-–—]\s)/i.test(x);
- const price=x=>{const m=x.match(/(?:^|\s)(\d{1,3}[.,]\d{2})\s*$/);if(!m)return[null,x];const v=toHW(m[1]);return v==null?[null,x]:[v,x.slice(0,m.index).trim().replace(/^[\-–—|]+|[\-–—|]+$/g,'')]};
- for(let i=0;i<L.length;i++){
-  const m=L[i].match(markets);if(!m)continue;
-  const market=classify(m[1])||'1X2';let pick=(m[2]||'').trim(),odds=null,match='Unknown',j=i+1;
-  [odds,pick]=price(pick); if(!pick&&j<L.length&&!markets.test(L[j])&&!foot.test(L[j]))pick=L[j++];
-  if(!pick||isUp(pick)||isTab(pick)||foot.test(pick))continue;
-  if(odds==null){const q=price(pick);if(q[0]!=null){odds=q[0];pick=q[1]}}
-  for(let k=0;k<5&&j<L.length;k++,j++){
-   const c=L[j];if(markets.test(c)||foot.test(c))break;
-   if(odds==null){const q=price(c);if(q[0]!=null){odds=q[0];if(q[1]&&q[1].length>3&&fixture(q[1]))match=q[1].replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ');continue}}
-   if(/^\d{1,3}[.,]\d{2}$/.test(c)){if(odds==null)odds=toHW(c);continue}
-   if(fixture(c)){match=c.replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ');continue}
-   if(/^\d{1,2}\s+[A-Za-z]{3,}/.test(c)||/\d{4}\s*\|/.test(c))continue;
-   break;
-  }
-  if(pick&&pick.length>1&&!foot.test(pick)&&!isUp(pick))legs.push(mkLeg({sel:pick,odds:odds??0,market,match},'Hollywoodbets'));
- }
- return legs.length?legs:null;
-}
-// Strict parser for the Hollywoodbets copied ticket layout. The market, price,
-// selection and fixture are separate lines; do not let a generic parser merge them.
-function parseHWBTicket(text){
- const L=lines0(text).filter(x=>!['×','x','X','•'].includes(x)),legs=[];
- const head=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)\s*[-–—:]\s*(.+)$/i;
- const footer=/^(multiple\s*accumulator|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b|place\s*bet)\b/i;
- const fixture=x=>/(?:\s+vs\.?\s+|\s+v\.?\s+|\s[-–—]\s)/i.test(x);
- const date=x=>/^\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4}\s*\||^\d{4}\s*\|/.test(x);
- for(let i=0;i<L.length;i++){
-  const m=L[i].match(head); if(!m) continue;
-  let sel=m[2].trim(), odds=null, match='Unknown';
-  // Some copied tickets append the price to the market/selection line.
-  const tail=sel.match(/^(.*?)\s+(\d{1,3}[.,]\d{2})$/);
-  if(tail){sel=tail[1].trim();odds=toHW(tail[2]);}
-  for(let j=i+1;j<L.length;j++){
-   const c=L[j];
-   if(head.test(c)||footer.test(c))break;
-   if(date(c))continue;
-   if(odds==null && /^\d{1,3}[.,]\d{2}$/.test(c)){odds=toHW(c);continue;}
-   if(fixture(c)){match=c.replace(/\s+vs\.?\s+/i,' - ').replace(/\s+v\.?\s+/i,' - ');break;}
-  }
-  if(sel && !footer.test(sel) && !isUp(sel)) legs.push(mkLeg({sel,odds:odds??0,market:classify(m[1])||'1X2',match},'Hollywoodbets'));
- }
- return legs.length?legs:null;
-}
-
 function sim(a,b){a=a.toLowerCase().replace(/[^a-z0-9]/g,'');b=b.toLowerCase().replace(/[^a-z0-9]/g,'');if(!a||!b)return 0;
  const d=Array.from({length:a.length+1},(_,i)=>[i,...Array(b.length).fill(0)]);for(let j=1;j<=b.length;j++)d[0][j]=j;
  for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));
@@ -723,8 +664,7 @@ function parseSporting(text){
  return legs.length?legs:null}
 function detectBookie(t){const lo=t.toLowerCase();
  if((lo.includes('full time -')||lo.includes('fulltime -'))&&(lo.includes('multiple accumulator')||lo.includes('final odds')||t.includes('×')||/\n[x×]\n/.test(t))&&!lo.includes('build a bet')&&!lo.includes('betway'))return 'Hollywoodbets';
- if((/full\s*time(?:\s*result)?\s*[-–—:]?/i.test(lo)&&(/\bmultiple\b|\baccumulator\b|\bfinal odds\b|\btotal odds\b|[×x]\s*\n|\bpotential\b/i.test(lo)||/\bvs?\.?\b/i.test(lo)))&&!lo.includes('betway')&&!lo.includes('build a bet'))return 'Hollywoodbets';
- if(/hollywoodbets\.(?:net|co\.za)/i.test(lo))return 'Hollywoodbets';
+ if(lo.includes('full time -')&&/ vs | v /.test(lo)&&!lo.includes('betway')&&!lo.includes('build a bet'))return 'Hollywoodbets';
  if(/\b1x2\b/.test(lo)&&/\d{4}-\d{2}-\d{2}/.test(t)&&(lo.includes('multibet')||lo.includes('total odds')||lo.includes('potential return')))return '10Bet';
  if(!lo.includes('betway')&&!lo.includes('build a bet')&&(lo.includes('1x2:')||/\b1x2\s*[12x]\b/.test(lo)||/\b1x2[12x]\b/.test(lo)||/\btotal\s*\(\d/.test(lo))&&(/\s[-–—]\s/.test(t)||lo.includes('supabets')||lo.includes('combined multiple')))return 'Supabets';
  {const mk=['draw no bet','match result -','match result','2up','legs selected','share my bet','(ep)'].filter(w=>lo.includes(w)).length+(/(^|\n)ep(\n|$)/.test(lo)?1:0);
@@ -735,25 +675,8 @@ function detectBookie(t){const lo=t.toLowerCase();
 const SPEC={Hollywoodbets:parseHWB,'10Bet':parse10Bet,Supabets:parseSupa,Sportingbet:parseSporting};
 function parse(text){
  const bk=detectBookie(text),clean=cleanBetway(text);
- // Hollywoodbets copied slips have a stable market / selection / price / fixture
- // layout. Prefer that parser outright when it returns legs; choosing whichever
- // parser happens to return the most legs caused a generic parser to overwrite
- // valid fractional prices (e.g. 0.16) and merge the selection into its label.
- if(bk==='Hollywoodbets'){
-  const candidates=[];
-  for(const t of [text,clean]){
-   for(const fn of [parseHWBTicket,parseHWBStructured,parseHWBFallback,parseHWB]){
-    try{const g=(fn(t)||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)candidates.push(g)}catch{}
-   }
-  }
-  const score=legs=>legs.reduce((n,l)=>n+(Number(l.odds)>1?4:0)+(l.match&&l.match!=='Unknown'?2:0)+(l.sel&&l.sel.length>2?1:0),0);
-  if(candidates.length){candidates.sort((a,b)=>score(b)-score(a)||b.length-a.length);return candidates[0]}
- }
- if(SPEC[bk]){
-  let best=[];
-  for(const t of [text,clean]){let g;try{g=SPEC[bk](t)}catch{};g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length>best.length)best=g}
-  if(best.length)return best;
- }
+ if(SPEC[bk]){for(const t of [text,clean]){let g;try{g=SPEC[bk](t)}catch{}
+  g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)return g}}
  let L=stripTabs(clean.split('\n').map(x=>x.trim()).filter(Boolean));
  let legs=anchored(L)||anchored(splitInline(L));
  if(legs){legs=legs.filter(l=>!junk(l));if(legs.length)return legs}
@@ -979,16 +902,7 @@ async function importImage(file){
  const st=$('#ocrst');if(!file||!file.type.startsWith('image/')){st.textContent='That is not an image file.';return}
  try{st.textContent='Loading OCR engine (first time downloads about 10 MB)…';await loadTess();
   const cv=await prepImage(file),w=await Tesseract.createWorker('eng',1,{logger:m=>{if(m.status==='recognizing text')st.textContent='Reading image… '+Math.round(m.progress*100)+'%'}});
-  // Desktop MatchDesk uses several OCR variants and votes on prices. In the browser,
-  // use two complementary page-segmentation passes and prefer the one that preserves
-  // more plausible odds + market/fixture structure instead of blindly trusting PSM 6.
-  let r6=null,r11=null;
-  try{
-   await w.setParameters({tessedit_pageseg_mode:'6'});r6=await w.recognize(cv);
-   await w.setParameters({tessedit_pageseg_mode:'11'});r11=await w.recognize(cv);
-  }finally{await w.terminate()}
-  const scoreOCR=r=>{if(!r?.data)return -1;const t=ocrClean(r.data.text||''),lines=t.split('\n').filter(Boolean),odds=(t.match(/(?<!\d)\d{1,3}[.,]\d{2}(?!\d)/g)||[]).length,markets=(t.match(/full\s*time|match\s*result|1x2|double\s*chance|draw\s*no\s*bet|btts|over|under|handicap/ig)||[]).length,fixtures=(t.match(/\b(?:vs?\.?|v\.?)\s+[A-Z][A-Za-z]/g)||[]).length;return odds*12+markets*4+fixtures*3+Math.min(lines.length,30)*.2+(Number(r.data.confidence)||0)*.08};
-  const r=scoreOCR(r11)>scoreOCR(r6)?r11:r6;
+  await w.setParameters({tessedit_pageseg_mode:'6'});const r=await w.recognize(cv);await w.terminate();
   const text=ocrClean(r.data.text),cf=Math.round(r.data.confidence);window._lowLines=new Set((r.data.lines||[]).filter(l=>l.confidence<75).map(l=>ocrClean(l.text).trim()));$('#slip').value=text;
   st.innerHTML=`Read from image (confidence ${cf}%). ${cf<60?'<span class="flag">Low confidence – a clearer, larger screenshot helps. </span>':''}Check the text below, fix anything wrong, then press Analyze.`;
   $('#analyze').click()}
@@ -1001,7 +915,7 @@ addEventListener('paste',e=>{const f=[...(e.clipboardData?.files||[])].find(x=>x
 function extractCode(raw,bookie='Auto'){raw=(raw||'').trim();if(!raw)return['',bookie];let m;
  if(m=raw.match(/[?&#]bookingCode=([A-Za-z0-9_-]+)/i))return[m[1],'Betway'];
  if(m=raw.match(/[?&#]shareCode=([A-Za-z0-9_-]+)/i))return[m[1],bookie];
- if(m=raw.match(/hollywoodbets\.(?:net|co\.za)\/(?:betting\/([0-9A-Za-z_-]+)\/code|betslip\/share\/([0-9A-Za-z_-]+)|share\/([0-9A-Za-z_-]+))/i))return[m[1]||m[2]||m[3],'Hollywoodbets'];
+ if(m=raw.match(/hollywoodbets\.net\/betting\/([0-9A-Za-z_-]+)\/code/i))return[m[1],'Hollywoodbets'];
  if(m=raw.match(/supabets\.co\.za\/Shared\/([0-9A-Za-z_-]+)/i))return[m[1],'Supabets'];
  if(m=raw.match(/sportingbet\.co\.za\/[^\s]*\/share-my-bet\/([0-9A-Za-z_-]+)/i))return[m[1],'Sportingbet'];
  if(m=raw.match(/\b(BW[0-9A-Fa-f]{6,12})\b/))return[m[1],'Betway'];
@@ -1011,7 +925,7 @@ function extractCode(raw,bookie='Auto'){raw=(raw||'').trim();if(!raw)return['',b
  return[raw,bookie]}
 const SITE={Betway:c=>[`https://www.betway.co.za/book-a-bet-results?bookingCode=${encodeURIComponent(c)}`],
  Supabets:c=>[`https://old.supabets.co.za/Shared/${encodeURIComponent(c)}`,`https://www.supabets.co.za/Shared/${encodeURIComponent(c)}`],
- Hollywoodbets:c=>[`https://www.hollywoodbets.net/betting/${encodeURIComponent(c)}/code`,`https://new.hollywoodbets.net/betting/${encodeURIComponent(c)}/code`,`https://www.hollywoodbets.net/betslip/share/${encodeURIComponent(c)}`,`https://www.hollywoodbets.net/share/${encodeURIComponent(c)}`,`https://m.hollywoodbets.net/betting/${encodeURIComponent(c)}/code`]};
+ Hollywoodbets:c=>[`https://www.hollywoodbets.net/betting/${encodeURIComponent(c)}/code`]};
 const looksLikeSlip=t=>t.includes('\n')&&(t.match(/(?<!\d)\d{1,3}[.,]\d{2}(?!\d)/g)||[]).length>=1;
 const HELPER='http://127.0.0.1:8765',BASES=['/api',HELPER+'/api'];
 async function findBase(){for(const b of BASES){try{const c=new AbortController(),t=setTimeout(()=>c.abort(),1500);

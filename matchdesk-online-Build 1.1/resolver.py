@@ -1,19 +1,8 @@
-"""resolver.py - booking-code loader extracted automatically from MatchDesk.py (same logic as the desktop app).
+"""resolver.py - booking-code loader extracted from the MatchDesk desktop app.
 
-Browserless support:
-  Set the environment variable BROWSERLESS_TOKEN to your free token from
-  https://www.browserless.io  (Dashboard → API Token).
-
-  Example (Linux/Mac):
-    export BROWSERLESS_TOKEN=your_token_here
-    python server.py
-
-  Example (Windows cmd):
-    set BROWSERLESS_TOKEN=your_token_here
-    python server.py
-
-  If BROWSERLESS_TOKEN is not set, the code falls back to local Playwright
-  exactly as before.
+The hosted PWA uses the same local Playwright/Chromium launch path as the
+working desktop application. Keep the Playwright Python package version in
+sync with the Chromium version supplied by the Docker base image.
 """
 import re, os, sys, json, hashlib, urllib.parse
 import requests
@@ -22,17 +11,6 @@ try:
     HAS_PLAYWRIGHT = True
 except Exception:
     HAS_PLAYWRIGHT = False
-
-# ---------- Browserless free-tier support ----------
-# Put your token here via environment variable (recommended) or hard-code below.
-BROWSERLESS_TOKEN = os.environ.get("BROWSERLESS_TOKEN", "").strip()
-# Optional: hard-code for testing only (remove before sharing the file)
-# BROWSERLESS_TOKEN = "2VVjAQbMVWKvdchd9666c40755335c43f60d045fea458f8e0"
-
-BROWSERLESS_WS = (
-    f"wss://production-sfo.browserless.io?token={BROWSERLESS_TOKEN}"
-    if BROWSERLESS_TOKEN else None
-)
 
 def get_config_dir():
     if getattr(sys, "frozen", False):
@@ -129,8 +107,6 @@ DEFAULT_BOOKIE_LOOKUP["Hollywoodbets"] = {
         "https://www.hollywoodbets.net/betslip/share/{code}",
         "https://www.hollywoodbets.net/share/{code}",
         "https://m.hollywoodbets.net/betting/{code}/code",
-        "https://www.hollywoodbets.co.za/betting/{code}/code",
-        "https://www.hollywoodbets.co.za/betslip/share/{code}",
     ],
 }
 
@@ -263,9 +239,9 @@ def _extract_booking_code(raw, bookie="Auto"):
     if m:
         return m.group(1).strip(), "Betway"
     # Hollywoodbets: /betting/{code}/code
-    m = re.search(r"(?i)hollywoodbets\.(?:net|co\.za)/(?:betting/([0-9A-Za-z_-]+)/code|betslip/share/([0-9A-Za-z_-]+)|share/([0-9A-Za-z_-]+))", raw)
+    m = re.search(r"(?i)hollywoodbets\.net/betting/([0-9A-Za-z_-]+)/code", raw)
     if m:
-        return next(g for g in m.groups() if g).strip(), "Hollywoodbets"
+        return m.group(1).strip(), "Hollywoodbets"
     # Supabets Shared/{code}
     m = re.search(r"(?i)supabets\.co\.za/Shared/([0-9A-Za-z_-]+)", raw)
     if m:
@@ -375,7 +351,7 @@ def _isolate_slip_lines(lines):
 
     return "\n".join(lines), False
 
-def _scrape_slip_with_playwright(url, timeout_ms=55000, load_code=None):
+def _scrape_slip_with_playwright(url, timeout_ms=55000):
     """Open a bookmaker share/results page headlessly and pull visible slip text.
     Returns (slip_text_or_None, message). Never raises."""
     if not HAS_PLAYWRIGHT:
@@ -387,114 +363,34 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000, load_code=None):
     body = ""
     try:
         with sync_playwright() as p:
-            if BROWSERLESS_WS:
-                # Remote browser via Browserless free tier
-                browser = p.chromium.connect_over_cdp(BROWSERLESS_WS)
-            else:
-                # Local Playwright (desktop / own machine)
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                    ],
-                )
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ],
+            )
             try:
-                # When using connect_over_cdp the default context already exists
-                if BROWSERLESS_WS and browser.contexts:
-                    context = browser.contexts[0]
-                else:
-                    context = browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/124.0.0.0 Safari/537.36"
-                        ),
-                        locale="en-ZA",
-                        viewport={"width": 1280, "height": 1100},
-                        extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
-                    )
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-ZA",
+                    viewport={"width": 1280, "height": 1100},
+                    extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
+                )
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                # Wait for the sportsbook SPA to initialise before interacting.
+                # Wait for SPA to populate odds / selections
                 try:
-                    page.wait_for_load_state("networkidle", timeout=min(18000, timeout_ms))
+                    page.wait_for_load_state("networkidle", timeout=min(25000, timeout_ms))
                 except Exception:
                     pass
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(3000)
                 body = page.inner_text("body") or ""
-
-                # Hollywoodbets share codes are entered in its own "Load a Bet"
-                # betslip workflow. They are not guaranteed to be public page URLs.
-                # Use the real website form instead of relying only on guessed URL
-                # patterns such as /betting/{code}/code.
-                if load_code:
-                    try:
-                        for label in (r"Load\s*A\s*Bet", r"Load\s*Bet", r"Enter\s*Code"):
-                            try:
-                                ctl = page.get_by_text(re.compile(label, re.I))
-                                if ctl.count() and ctl.first.is_visible():
-                                    ctl.first.click(timeout=2500)
-                                    page.wait_for_timeout(700)
-                                    break
-                            except Exception:
-                                pass
-                        inputs = page.locator("input")
-                        target = None
-                        for ix in range(min(inputs.count(), 40)):
-                            el = inputs.nth(ix)
-                            try:
-                                if not el.is_visible() or not el.is_enabled():
-                                    continue
-                                meta = " ".join(str(el.get_attribute(a) or "") for a in
-                                                ("placeholder", "aria-label", "name", "id", "type"))
-                                if re.search(r"bet|code|share|booking|reference", meta, re.I):
-                                    target = el
-                                    break
-                            except Exception:
-                                continue
-                        if target is None:
-                            # Some responsive layouts expose the first visible
-                            # text input without a descriptive placeholder.
-                            for ix in range(min(inputs.count(), 40)):
-                                el = inputs.nth(ix)
-                                try:
-                                    if el.is_visible() and el.is_enabled() and (el.get_attribute("type") or "text").lower() in ("text", "search", "tel", "number"):
-                                        target = el
-                                        break
-                                except Exception:
-                                    continue
-                        if target is not None:
-                            target.fill(str(load_code))
-                            submitted = False
-                            for label in (r"Load", r"Submit", r"Redeem", r"Continue"):
-                                try:
-                                    btn = page.get_by_role("button", name=re.compile(label, re.I))
-                                    for bi in range(min(btn.count(), 5)):
-                                        if btn.nth(bi).is_visible() and btn.nth(bi).is_enabled():
-                                            btn.nth(bi).click(timeout=3000)
-                                            submitted = True
-                                            break
-                                    if submitted:
-                                        break
-                                except Exception:
-                                    pass
-                            if not submitted:
-                                try:
-                                    target.press("Enter", timeout=2000)
-                                    submitted = True
-                                except Exception:
-                                    pass
-                            if submitted:
-                                try:
-                                    page.wait_for_load_state("networkidle", timeout=12000)
-                                except Exception:
-                                    pass
-                                page.wait_for_timeout(3500)
-                                body = page.inner_text("body") or body
-                    except Exception:
-                        pass
                 # Cookie / age / region banners
                 for label in (
                     "Accept", "Accept all", "Accept All", "I agree", "Got it", "OK",
@@ -733,22 +629,15 @@ def fetch_betway_booking(code, timeout_ms=45000):
     """
     try:
         with sync_playwright() as p:
-            if BROWSERLESS_WS:
-                browser = p.chromium.connect_over_cdp(BROWSERLESS_WS)
-            else:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=["--disable-blink-features=AutomationControlled",
-                          "--disable-dev-shm-usage", "--no-sandbox"])
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"])
             try:
-                if BROWSERLESS_WS and browser.contexts:
-                    context = browser.contexts[0]
-                else:
-                    context = browser.new_context(
-                        user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                    "Chrome/124.0.0.0 Safari/537.36"),
-                        locale="en-ZA", viewport={"width": 1280, "height": 900})
+                context = browser.new_context(
+                    user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/124.0.0.0 Safari/537.36"),
+                    locale="en-ZA", viewport={"width": 1280, "height": 900})
                 page = context.new_page()
                 page.goto(_BETWAY_ORIGIN, wait_until="domcontentloaded",
                           timeout=timeout_ms)
@@ -845,17 +734,6 @@ def resolve_booking_code(code, bookie):
 
     cfg_all = load_bookie_lookup()
     headers_base = {"User-Agent": "Mozilla/5.0 MatchDesk"}
-
-    # Hollywoodbets numeric Share Bet IDs must be loaded through the sportsbook's
-    # own Load a Bet form. Try that supported workflow first, then retain the
-    # legacy direct-share URL fallbacks below for older links.
-    if bookie == "Hollywoodbets" and re.fullmatch(r"\d{8,14}", code):
-        hb_text, hb_msg = _scrape_slip_with_playwright(
-            "https://www.hollywoodbets.net/", load_code=code
-        )
-        if hb_text:
-            return hb_text, hb_msg
-
     tries = []
 
     if re.match(r"(?i)^https?://", code):
