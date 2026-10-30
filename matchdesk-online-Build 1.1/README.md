@@ -97,3 +97,6 @@ Support address shown in the app: Matchdesksupport@gmail.com.
 - **Football-Data.org** (optional key in About -> Settings). When a user has saved a key AND both teams are in a league Football-Data covers (see `FD_OF` in `web/app.js`), Football-Data is used first because it also counts cup and European matches. For every other match ESPN is used. If the preferred source has nothing, the other one is tried.
 - A rejected Football-Data key does not break anything: ESPN data is shown with a note.
 - ESPN's endpoints are unofficial and could change; if form details stop appearing for everyone, check the ESPN calls in the browser's network tab first.
+
+
+Hollywoodbets reliability update: screenshot OCR parsing now recognizes cropped slips without the bookmaker header, reads odds displayed on the same line as a selection, and prioritizes the dedicated Hollywoodbets leg parser. The server-side Hollywoodbets browser lookup no longer waits for network-idle (which can hang on live bookmaker pages) and has bounded navigation/wait times across two endpoints.

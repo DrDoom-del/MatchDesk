@@ -568,7 +568,7 @@ function parseHWB(text){
  const L=lines0(text).filter(l=>!['×','x','X','•'].includes(l)), legs=[];
  const lead=/^(full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|double\s*chance|draw\s*no\s*bet|dnb|total(?:\s*goals|\s*corners)?|over|under|btts|both\s*teams(?:\s*to\s*score)?|handicap|asian\s*handicap|correct\s*score|half\s*time|1st\s*half|2nd\s*half|win\s*to\s*nil|clean\s*sheet|to\s*score|odd\/?even|exact\s*goals|which\s*team\s*to\s*score)\s*[-–—:]\s*(.+)$/i;
  const foot=/^(multiple(?:\s+accumulator)?|accumulator|odds|bonus|final\s*odds|total\s*odds|stake|potential|payout|ticket|single|simulate|real\b)/i;
- const price=/^\d{1,3}[.,]\d{2}$/;
+ const price=/^\d{1,3}[.,]\d{2}\s*[x×●•]?$/i;
  const fixture=l=>/\s(?:vs\.?|v\.?)\s/i.test(l)||/\s[-–—]\s/.test(l);
  const dateLine=l=>/\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(l)||/\d{4}\s*\|/.test(l);
  for(let i=0;i<L.length;i++){
@@ -576,7 +576,7 @@ function parseHWB(text){
    const marketName=h[1].trim();
    let pick=h[2].trim(), odds=null, match=null;
    // Some layouts put the price at the end of the heading/selection.
-   const inline=pick.match(/^(.*?)\s+(\d{1,3}[.,]\d{2})$/);
+   const inline=pick.match(/^(.*?)\s+(\d{1,3}[.,]\d{2})\s*[x×●•]?$/i);
    if(inline){pick=inline[1].trim();odds=toHW(inline[2]);}
    // Read only until the next market heading; never let a later leg's
    // selection, price or fixture overwrite this leg.
@@ -663,8 +663,11 @@ function parseSporting(text){
   legs.push(mkLeg({sel,odds,market:market||'1X2',match},'Sportingbet'));i=Math.max(j,i+1)}
  return legs.length?legs:null}
 function detectBookie(t){const lo=t.toLowerCase();
- if((lo.includes('full time -')||lo.includes('fulltime -'))&&(lo.includes('multiple accumulator')||lo.includes('final odds')||t.includes('×')||/\n[x×]\n/.test(t))&&!lo.includes('build a bet')&&!lo.includes('betway'))return 'Hollywoodbets';
- if(lo.includes('full time -')&&/ vs | v /.test(lo)&&!lo.includes('betway')&&!lo.includes('build a bet'))return 'Hollywoodbets';
+ // Cropped Hollywoodbets screenshots often omit the bookmaker logo/header.
+ const hwHead=(t.match(/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|1x2)\s*[-–—:]/gim)||[]).length;
+ const hwFixtures=(t.match(/^.+?\s+(?:vs\.?|v\.?)\s+.+$/gim)||[]).length;
+ const hwPrices=(t.match(/^\s*\d{1,3}[.,]\d{2}\s*[x×]?\s*$/gim)||[]).length;
+ if(hwHead>=1&&hwFixtures>=1&&(hwPrices>=1||/multiple\s+accumulator|final\s+odds|betslip/i.test(t))&&!/build a bet|betway/i.test(lo))return 'Hollywoodbets';
  if(/\b1x2\b/.test(lo)&&/\d{4}-\d{2}-\d{2}/.test(t)&&(lo.includes('multibet')||lo.includes('total odds')||lo.includes('potential return')))return '10Bet';
  if(!lo.includes('betway')&&!lo.includes('build a bet')&&(lo.includes('1x2:')||/\b1x2\s*[12x]\b/.test(lo)||/\b1x2[12x]\b/.test(lo)||/\btotal\s*\(\d/.test(lo))&&(/\s[-–—]\s/.test(t)||lo.includes('supabets')||lo.includes('combined multiple')))return 'Supabets';
  {const mk=['draw no bet','match result -','match result','2up','legs selected','share my bet','(ep)'].filter(w=>lo.includes(w)).length+(/(^|\n)ep(\n|$)/.test(lo)?1:0);
@@ -675,7 +678,12 @@ function detectBookie(t){const lo=t.toLowerCase();
 const SPEC={Hollywoodbets:parseHWB,'10Bet':parse10Bet,Supabets:parseSupa,Sportingbet:parseSporting};
 function parse(text){
  const bk=detectBookie(text),clean=cleanBetway(text);
- if(SPEC[bk]){for(const t of [text,clean]){let g;try{g=SPEC[bk](t)}catch{}
+ // Prefer the dedicated Hollywoodbets leg reader for cropped slip screenshots.
+ if(bk==='Hollywoodbets'||/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|1x2)\s*[-–—:]/im.test(text)){
+  for(const t of [text,clean]){let g;try{g=parseHWB(t)}catch{}
+   g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)return g}
+ }
+ if(SPEC[bk]&&bk!=='Hollywoodbets'){for(const t of [text,clean]){let g;try{g=SPEC[bk](t)}catch{}
   g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)return g}}
  let L=stripTabs(clean.split('\n').map(x=>x.trim()).filter(Boolean));
  let legs=anchored(L)||anchored(splitInline(L));
@@ -882,7 +890,8 @@ function ocrClean(t){
  return t.split('\n').map(l=>{l=l.trim();
   if(/^[x×]2$/i.test(l))return '1X2';                                   // "1X2" loses its leading 1
   l=l.replace(/(?<![\w])x2([12x])(?=\s)/i,'1x2$1');                      // "x21 150" -> "1x21 150"
-  l=l.replace(/(\d[.,]?\d{2})\s+[§®©xX×B]\s*$/,'$1');                    // stray chip symbols after the price
+  l=l.replace(/(\d[.,]?\d{2})\s*[§®©xX×B●•]\s*$/,'$1');
+  l=l.replace(/[‐‑‒–—]/g,'-');                    // stray chip symbols after the price
   if(/[A-Za-z]{3}/.test(l)&&!/\d{1,2}:\d{2}|\d{4}/.test(l))               // dropped decimal: "Al-Masry 141" -> 1.41
    l=l.replace(/(\s)([1-9])(\d{2})(?=\s*(?:[xX×]|$))/,(m,a,b,c)=>`${a}${b}.${c}`);
   return l}).filter(Boolean).join('\n')}

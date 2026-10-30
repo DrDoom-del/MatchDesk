@@ -351,7 +351,7 @@ def _isolate_slip_lines(lines):
 
     return "\n".join(lines), False
 
-def _scrape_slip_with_playwright(url, timeout_ms=55000):
+def _scrape_slip_with_playwright(url, timeout_ms=22000):
     """Open a bookmaker share/results page headlessly and pull visible slip text.
     Returns (slip_text_or_None, message). Never raises."""
     if not HAS_PLAYWRIGHT:
@@ -384,12 +384,9 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                 )
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                # Wait for SPA to populate odds / selections
-                try:
-                    page.wait_for_load_state("networkidle", timeout=min(25000, timeout_ms))
-                except Exception:
-                    pass
-                page.wait_for_timeout(3000)
+                # Do not wait for networkidle: bookmaker pages keep analytics,
+                # live-score and websocket requests open indefinitely.
+                page.wait_for_timeout(1800)
                 body = page.inner_text("body") or ""
                 # Cookie / age / region banners
                 for label in (
@@ -419,11 +416,11 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                             const t = document.body ? document.body.innerText : '';
                             return /\d{1,3}\.\d{2}/.test(t) || t.length > 400;
                         }""",
-                        timeout=12000,
+                        timeout=7000,
                     )
                 except Exception:
                     pass
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(500)
                 body = page.inner_text("body") or body
                 # Prefer denser slip containers when present
                 for sel in (
@@ -761,6 +758,8 @@ def resolve_booking_code(code, bookie):
             for au in (c.get("alt_urls") or []):
                 if au and au not in urls:
                     urls.append(au)
+            if n == "Hollywoodbets":
+                urls = urls[:2]
             for u in urls:
                 url = u.replace("{code}", urllib.parse.quote(code))
                 tries.append((url, c.get("headers") or {}, c))
