@@ -82,8 +82,9 @@ function addEntries(list){const t=tracked();let add=0;for(const e of list){if(t.
     // Prefer keeping a specific league if the new one is empty, or upgrade empty to specific
     const idx=t.findIndex(x=>x.sport===e.sport&&(x.team||'').toLowerCase().trim()===tn);
     if(idx>=0&&!(t[idx].league||'')&&(e.league||'')){t[idx].league=e.league}
+    if(idx>=0&&e.any&&!t[idx].any&&!(t[idx].league||'')){t[idx].any=true}
     continue}
-  t.push({team:e.team.trim(),sport:e.sport||'soccer',league:e.league||''});add++}
+  t.push(Object.assign({team:e.team.trim(),sport:e.sport||'soccer',league:e.league||''},e.any?{any:true}:{}));add++}
  setTracked(t);return add}
 function toggleTeam(n){let t=tracked();const sport=$('#sport').value,lg=$('#league').value,i=t.findIndex(e=>e.sport===sport&&e.team.toLowerCase()===n.toLowerCase());
  if(i>=0){t.splice(i,1);setTracked(t)}else{if(t.length>=MAX_TRACK){$('#status').textContent=`You can track up to ${MAX_TRACK} items.`;return}addEntries([{team:n,sport,league:lg}])}loadScores()}
@@ -116,6 +117,7 @@ function addSlipTeams(legs){
       if(!normTeam(can))continue;
       const prev=byKey.get(key);
       const entry={team:can,sport,league:sport==='cricket'?'current':sport==='rugby'?'':'',};
+      if(sport==='soccer')entry.any=true;   // sport is only a guess for slip teams: look in rugby leagues as well
       if(!prev||can.length>prev.team.length)byKey.set(key,entry);
     }
   }
@@ -192,15 +194,15 @@ let lastList=[];
 let browse=true;   // false right after Clear: show an empty state instead of the whole league
 let loadSeq=0;   // a newer refresh always wins: a slow older one must never repaint over it
 async function loadScores(){const my=++loadSeq,stEl=$('#status'),box=$('#matches'),tr=tracked(),pairs=new Set(),jobs=[];let f1Mode=null,ckNames=null,ckWhole=false;
- const consider=(sport,league,team)=>{const sp=spt(sport);
+ const consider=(sport,league,team,any)=>{const sp=spt(sport);
   if(sp.special==='f1')f1Mode=(league==='season'||f1Mode==='season')?'season':'latest';
   else if(sp.special==='cricket'){ckNames=ckNames||[];if(!team||team.startsWith('🌐'))ckWhole=true;else ckNames.push(team)}
   else if(league)pairs.add(sport+'|'+league);
-  else if(sport==='soccer')MAJOR.forEach(l=>pairs.add('soccer|'+l));
+  else if(sport==='soccer'){MAJOR.forEach(l=>pairs.add('soccer|'+l));if(any&&SPORTS.rugby)SPORTS.rugby.leagues.forEach(L=>pairs.add('rugby|'+L[0]))}
   else if(sport==='rugby'&&SPORTS.rugby)SPORTS.rugby.leagues.forEach(L=>pairs.add('rugby|'+L[0]));
  };
  if(!tr.length&&!browse){lastList=[];box.innerHTML=`<div class="card"><b>Nothing is being tracked.</b><p class="muted">Pick a league above and tap teams to follow them, or <button class="chip" id="browsebtn">show all matches in ${esc(leagueName())}</button></p></div>`;stEl.textContent='';try{drawVideo()}catch{}if($('#dash').classList.contains('on'))drawDash();return}
- if(!tr.length)consider($('#sport').value,$('#league').value,'');else tr.forEach(e=>consider(e.sport,e.league,e.team));
+ if(!tr.length)consider($('#sport').value,$('#league').value,'');else tr.forEach(e=>consider(e.sport,e.league,e.team,e.any));
  const ymd=d=>{const x=new Date(d);return x.getFullYear()+String(x.getMonth()+1).padStart(2,'0')+String(x.getDate()).padStart(2,'0')};
  const yday=ymd(Date.now()-864e5);
  [...pairs].forEach(p=>jobs.push({name:p.split('|')[1],run:async()=>{
@@ -1042,7 +1044,7 @@ async function importImage(file){
   $('#analyze').click()}
  catch(e){st.textContent='Image import failed: '+e.message}}
 $('#img').onchange=e=>{importImage(e.target.files[0]);e.target.value=''};
-addEventListener('paste',e=>{const f=[...(e.clipboardData?.files||[])].find(x=>x.type.startsWith('image/'));if(f){e.preventDefault();$('#analyzer').classList.contains('on')||document.querySelector('[data-t=analyzer]').click();importImage(f)}});
+addEventListener('paste',e=>{const cd=e.clipboardData,f=[...(cd?.files||[])].find(x=>x.type.startsWith('image/'))||[...(cd?.items||[])].filter(x=>x.kind==='file'&&x.type.startsWith('image/')).map(x=>x.getAsFile()).find(Boolean);if(f){e.preventDefault();$('#analyzer').classList.contains('on')||document.querySelector('[data-t=analyzer]').click();importImage(f)}});
 
 
 // ---------- booking code / Bet ID / share link (ported from _extract_booking_code) ----------
@@ -1112,18 +1114,58 @@ async function bookingOpen(){
  st.innerHTML=(st.innerHTML.includes('Could not load automatically')?st.innerHTML+'<br>':'')+`Code <b>${esc(code)}</b> (${esc(bk)}) opened in a new tab. There, select the slip (Ctrl+A), copy it (Ctrl+C), come back and press <b>Paste from Clipboard</b>.${urls[1]?` <a href="${esc(urls[1])}" target="_blank" rel="noopener">Alternative page</a>`:''}`}
 async function pasteClipboard(){const st=$('#bst');
  const putText=t=>{t=(t||'').trim();
-  if(!t){st.textContent='The clipboard is empty. Copy a slip, a booking code or a screenshot first.';return}
-  if(!looksLikeSlip(t)&&t.length<=120&&(/^https?:\/\/\S+$/i.test(t)||/^[A-Za-z0-9_-]{5,24}$/.test(t))){$('#bcode').value=t;st.innerHTML='That looks like a booking code or link, so I put it in the code box. Press <b>Load code</b>.';$('#bopen').focus();return}
-  $('#slip').value=t;st.textContent='Pasted from your clipboard.';$('#analyze').click()};
- try{
-  if(navigator.clipboard&&navigator.clipboard.read){const items=await navigator.clipboard.read();
-   for(const it of items){const ty=it.types.find(x=>x.startsWith('image/'));
-    if(ty){const blob=await it.getType(ty);st.textContent='Screenshot found on the clipboard – reading it…';importImage(new File([blob],'clipboard.'+(ty.split('/')[1]||'png'),{type:ty}));return}}
-   for(const it of items)if(it.types.includes('text/plain')){putText(await(await it.getType('text/plain')).text());return}
-   st.textContent='Nothing I can use on the clipboard. Copy a slip, a booking code or a screenshot first.';return}
-  putText(await navigator.clipboard.readText())}
- catch(e){const b=$('#slip');b.focus();b.select();
-  st.innerHTML='Your browser did not allow automatic clipboard access. <b>Press Ctrl+V now</b> (or long-press and Paste on a phone) – text and screenshots both work, and I will read them as soon as they land. To allow it permanently, click the icon left of the address bar and set Clipboard to Allow.'}}
+  if(!t){st.textContent='The clipboard is empty. Copy a slip, a booking code or a screenshot first.';return true}
+  if(!looksLikeSlip(t)&&t.length<=120&&(/^https?:\/\/\S+$/i.test(t)||/^[A-Za-z0-9_-]{5,24}$/.test(t))){$('#bcode').value=t;st.innerHTML='That looks like a booking code or link, so I put it in the code box. Press <b>Load code</b>.';$('#bopen').focus();return true}
+  $('#slip').value=t;st.textContent='Pasted from your clipboard.';$('#analyze').click();return true};
+ // never wait forever on a browser permission prompt that was ignored or never appears
+ const withTimeout=(p,ms)=>Promise.race([p,new Promise((_,rej)=>setTimeout(()=>rej(new Error('clipboard timeout')),ms))]);
+ // One-tap paste zone: the SAME route as Ctrl+V (the browser's own paste event), but usable on a phone
+ // (tap and hold, then Paste) as well as on a PC (Ctrl+V). It never needs clipboard permission.
+ const touch=(()=>{try{return matchMedia('(pointer:coarse)').matches}catch{return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent||'')}})();
+ const manual=(lead)=>{
+  let wrap=document.getElementById('pastezone');
+  if(!wrap){wrap=document.createElement('div');wrap.id='pastezone';
+   wrap.style.cssText='margin:8px 0;padding:10px;border:2px dashed currentColor;border-radius:10px;opacity:.95';
+   wrap.innerHTML='<div class="pz-msg" style="margin-bottom:6px"></div><div class="pz-box" contenteditable="true" inputmode="none" role="textbox" aria-label="Paste here" style="min-height:56px;padding:8px;border-radius:8px;outline:2px solid currentColor;outline-offset:-2px;word-break:break-all"></div><button type="button" class="ghost pz-close" style="margin-top:6px">Cancel</button>';
+   st.insertAdjacentElement('afterend',wrap);
+   wrap.querySelector('.pz-close').onclick=()=>{wrap.hidden=true};
+  }
+  wrap.hidden=false;
+  const how=touch?'<b>Tap and hold inside the box below, then tap Paste.</b>':'<b>Press Ctrl+V now</b> (or right-click the box and choose Paste).';
+  wrap.querySelector('.pz-msg').innerHTML=(lead?esc(lead)+' ':'')+how+' Text, booking codes and screenshots are all read the moment they land.';
+  const box=wrap.querySelector('.pz-box');box.textContent='';
+  box.onpaste=e=>{
+   const cd=e.clipboardData;if(!cd)return;
+   const img=[...(cd.files||[])].find(x=>/^image\//i.test(x.type))||[...(cd.items||[])].filter(x=>x.kind==='file'&&/^image\//i.test(x.type)).map(x=>x.getAsFile()).find(Boolean);
+   e.preventDefault();e.stopPropagation();
+   if(img){wrap.hidden=true;st.textContent='Screenshot pasted – reading it…';importImage(img);return}
+   const t=cd.getData('text/plain');
+   if(t&&t.trim()){wrap.hidden=true;putText(t);return}
+   box.textContent='';st.textContent='Nothing usable was pasted. Copy a slip, a booking code or a screenshot and try again.'};
+  try{box.focus()}catch{}
+  st.textContent=''};
+ if(!navigator.clipboard){manual('This page is not allowed to read the clipboard directly.');return}
+ st.textContent='Reading your clipboard…';
+ let seen=[],err=null;
+ // 1) read() first, called straight from the click: it is the only call that can return screenshots
+ if(navigator.clipboard.read){
+  try{const items=await withTimeout(navigator.clipboard.read(),8000);
+   for(const it of items)for(const ty of it.types)if(!seen.includes(ty))seen.push(ty);
+   // a screenshot / image of any type the browser exposes
+   for(const it of items){const ty=it.types.find(x=>/^image\//i.test(x));
+    if(ty){const blob=await it.getType(ty);st.textContent='Screenshot found on the clipboard – reading it…';
+     importImage(new File([blob],'clipboard.'+((ty.split('/')[1]||'png').replace(/[^a-z0-9]/gi,'')||'png'),{type:blob.type||ty}));return}}
+   // copied web content may carry the picture inside HTML as an embedded image
+   for(const it of items)if(it.types.includes('text/html')){
+    const h=await(await it.getType('text/html')).text(),m=h.match(/<img[^>]+src=["'](data:image\/[^"']+)["']/i);
+    if(m){try{const blob=await(await fetch(m[1])).blob();st.textContent='Picture found on the clipboard – reading it…';importImage(new File([blob],'clipboard.png',{type:blob.type||'image/png'}));return}catch{}}}
+   for(const it of items)if(it.types.includes('text/plain')){const t=await(await it.getType('text/plain')).text();if(t&&t.trim()){putText(t);return}}
+  }catch(e){err=e}}
+ // 2) plain text fallback for browsers where read() is missing or refused
+ try{const t=await withTimeout(navigator.clipboard.readText(),8000);if(t&&t.trim()){putText(t);return}err=null}catch(e){err=err||e}
+ if(err){manual(/timeout/i.test(err.message||'')?'The browser did not answer the clipboard permission request.':'Your browser did not allow automatic clipboard access.');return}
+ // The button's clipboard API saw nothing; a real paste (zone below) often still can.
+ manual('The button cannot see this clipboard directly.'+(seen.length?' (saw: '+seen.join(', ')+')':''))}
 // Pasting a full slip straight into the slip box or the code box analyzes it automatically (no clipboard permission needed)
 $('#slip').addEventListener('paste',()=>setTimeout(()=>{if($('#slip').value.trim()){$('#bst').textContent='Pasted – analyzed.';$('#analyze').click()}},50));
 $('#bcode').addEventListener('paste',()=>setTimeout(()=>{if(looksLikeSlip($('#bcode').value.trim()))bookingOpen()},50));

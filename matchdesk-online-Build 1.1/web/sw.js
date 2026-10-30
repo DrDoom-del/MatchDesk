@@ -1,5 +1,5 @@
 /* MatchDesk service worker — cache shell for offline use */
-const CACHE = 'matchdesk-shell-v13';
+const CACHE = 'matchdesk-shell-v18';
 const SHELL = [
   './',
   './index.html',

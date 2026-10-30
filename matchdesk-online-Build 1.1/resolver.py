@@ -12,6 +12,18 @@ try:
 except Exception:
     HAS_PLAYWRIGHT = False
 
+# ---------- Browserless free-tier support (restored from the working build) ----------
+# Put your token here via environment variable (recommended) or hard-code below.
+BROWSERLESS_TOKEN = os.environ.get("BROWSERLESS_TOKEN", "").strip()
+# Optional: hard-code for testing only (remove before sharing the file)
+# BROWSERLESS_TOKEN = "2VVjAQbMVWKvdchd9666c40755335c43f60d045fea458f8e0"
+
+BROWSERLESS_WS = (
+    f"wss://production-sfo.browserless.io?token={BROWSERLESS_TOKEN}"
+    if BROWSERLESS_TOKEN else None
+)
+
+
 def get_config_dir():
     if getattr(sys, "frozen", False):
         appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -238,8 +250,8 @@ def _extract_booking_code(raw, bookie="Auto"):
     m = re.search(r"(?i)betway.co.za/book-a-bet-results[^\s]*bookingCode=([A-Za-z0-9_-]+)", raw)
     if m:
         return m.group(1).strip(), "Betway"
-    # Hollywoodbets: /betting/{code}/code and common share variants
-    m = re.search(r"(?i)hollywoodbets\.net/(?:betting|betslip/share|share)/([0-9A-Za-z_-]+)(?:/code)?", raw)
+    # Hollywoodbets: /betting/{code}/code
+    m = re.search(r"(?i)hollywoodbets\.net/betting/([0-9A-Za-z_-]+)/code", raw)
     if m:
         return m.group(1).strip(), "Hollywoodbets"
     # Supabets Shared/{code}
@@ -254,32 +266,21 @@ def _extract_booking_code(raw, bookie="Auto"):
     m = re.search(r"\b(BW[0-9A-Fa-f]{6,12})\b", raw)
     if m:
         return m.group(1).strip(), "Betway"
-    # Long numeric Hollywoodbets-style Bet IDs (8–14 digits)
+    # Long numeric Hollywoodbets-style codes (8–14 digits)
     m = re.search(r"\b(\d{8,14})\b", raw)
     if m:
         hint = bookie if bookie not in ("Auto", "", None) else "Hollywoodbets"
         return m.group(1).strip(), hint
-    # Hollywoodbets alphanumeric share codes (e.g. HB4K7T2)
-    m = re.search(r"\b(HB[0-9A-Za-z]{3,12})\b", raw)
-    if m:
-        return m.group(1).strip(), "Hollywoodbets"
-    # Explicit Bet ID / share / booking code label → prefer Hollywoodbets when Auto
-    m = re.search(
-        r"(?i)(?:bet\s*id|share\s*(?:bet\s*)?code|booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})",
-        raw,
-    )
-    if m:
-        code = m.group(1).strip()
-        if bookie not in ("Auto", "", None):
-            return code, bookie
-        if re.fullmatch(r"\d{8,14}", code) or re.match(r"(?i)^HB[0-9A-Za-z]", code):
-            return code, "Hollywoodbets"
-        return code, bookie
     # Generic short alphanumeric booking code (standalone token)
     if re.fullmatch(r"[A-Za-z0-9_-]{5,20}", raw):
-        if bookie in ("Auto", "", None) and re.match(r"(?i)^HB[0-9A-Za-z]", raw):
-            return raw, "Hollywoodbets"
         return raw, bookie
+    m = re.search(r"(?i)(?:booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})", raw)
+    if m:
+        return m.group(1).strip(), bookie
+    return raw, bookie
+    m = re.search(r"(?i)(?:booking\s*code|bet\s*code|code)\s*[:-]?\s*([A-Za-z0-9_-]{5,20})", raw)
+    if m:
+        return m.group(1).strip(), bookie
     return raw, bookie
 
 _SLIP_HEAD_RE = re.compile(
@@ -290,23 +291,18 @@ _SLIP_END_RE = re.compile(
     r"(?i)^(?:total\s*odds|multi\s*bet|multibet|total\s*stake|stake\b|"
     r"potential|place\s*bet|possible\s*(?:win|return)|payout)")
 
-_SLIP_ODDS_RE = re.compile(r"^(?:\d{1,4}[.,]\d{2}|\.\d{2})$")
+_SLIP_ODDS_RE = re.compile(r"^\d{1,4}\.\d{2}$")
 
 _SLIP_JUNK = ("cookie", "privacy", "responsible", "licence", "license",
               "sign in", "log in", "register", "download the app", "18+")
 
 def _count_anchor_legs(chunk):
-    """How many 'name / odds' pairs a block of lines contains.
-
-    Hollywoodbets often shows profit odds (0.45 → decimal 1.45), so values
-    between 0.01 and 0.99 count as selection prices as well.
-    """
+    """How many 'name / odds' pairs a block of lines contains."""
     n = 0
     for i, l in enumerate(chunk):
         if i and _SLIP_ODDS_RE.match(l) and not _SLIP_ODDS_RE.match(chunk[i - 1]):
             try:
-                v = float(l)
-                if v > 1.0 or (0.01 <= v < 1.0):
+                if float(l) > 1.0:
                     n += 1
             except ValueError:
                 pass
@@ -319,9 +315,6 @@ def _isolate_slip_lines(lines):
     selections, prefers the block that has exactly that many legs."""
     lines = [l for l in lines
              if not any(j in l.lower() for j in _SLIP_JUNK)]
-    hwb = _isolate_hwb_slip(lines)
-    if hwb:
-        return hwb, True
     declared = None
     for l in lines:
         m = re.match(r"(?i)^(\d{1,2})\s*(?:selections?|legs?)\b", l)
@@ -350,25 +343,9 @@ def _isolate_slip_lines(lines):
             for n, chunk in cands:
                 if n == declared:
                     return "\n".join(chunk), True
-            merged, total = [], 0
-            for n, chunk in cands:
-                if merged:
-                    merged.append("")
-                merged.extend(chunk)
-                total += n
-                if total >= declared:
-                    break
-            if total:
-                return "\n".join(merged), True
-        if len(cands) >= 2 and all(n == 1 for n, _ in cands) and len(cands) <= 12:
-            merged = []
-            for n, chunk in cands:
-                if merged:
-                    merged.append("")
-                merged.extend(chunk)
-            return "\n".join(merged), True
-        best = max(cands, key=lambda x: x[0])
-        return "\n".join(best[1]), True
+        # otherwise the block with the fewest stray legs that is still non-empty
+        # is almost always the slip itself; take the first one on the page
+        return "\n".join(cands[0][1]), True
 
     # No footer structure found: if the page says how many legs there are,
     # take just that many name/odds pairs starting at the first one.
@@ -477,7 +454,7 @@ def _page_slip_text(page, body):
     )
     return hwb or best
 
-def _scrape_slip_with_playwright(url, timeout_ms=22000):
+def _scrape_slip_with_playwright(url, timeout_ms=55000):
     """Open a bookmaker share/results page headlessly and pull visible slip text.
     Returns (slip_text_or_None, message). Never raises."""
     if not HAS_PLAYWRIGHT:
@@ -489,30 +466,42 @@ def _scrape_slip_with_playwright(url, timeout_ms=22000):
     body = ""
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
-            )
-            try:
-                context = browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"
-                    ),
-                    locale="en-ZA",
-                    viewport={"width": 1280, "height": 1100},
-                    extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
+            if BROWSERLESS_WS:
+                # Remote browser via Browserless free tier
+                browser = p.chromium.connect_over_cdp(BROWSERLESS_WS)
+            else:
+                # Local Playwright (desktop / own machine)
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
                 )
+            try:
+                # When using connect_over_cdp the default context already exists
+                if BROWSERLESS_WS and browser.contexts:
+                    context = browser.contexts[0]
+                else:
+                    context = browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                        locale="en-ZA",
+                        viewport={"width": 1280, "height": 1100},
+                        extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
+                    )
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                # Do not wait for networkidle: bookmaker pages keep analytics,
-                # live-score and websocket requests open indefinitely.
-                page.wait_for_timeout(1800)
+                # Wait for SPA to populate odds / selections
+                try:
+                    page.wait_for_load_state("networkidle", timeout=min(25000, timeout_ms))
+                except Exception:
+                    pass
+                page.wait_for_timeout(3000)
                 body = page.inner_text("body") or ""
                 # Cookie / age / region banners
                 for label in (
@@ -542,13 +531,27 @@ def _scrape_slip_with_playwright(url, timeout_ms=22000):
                             const t = document.body ? document.body.innerText : '';
                             return /\d{1,3}\.\d{2}/.test(t) || t.length > 400;
                         }""",
-                        timeout=7000,
+                        timeout=12000,
                     )
                 except Exception:
                     pass
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(1500)
                 body = page.inner_text("body") or body
-                body = _page_slip_text(page, body)
+                # Prefer denser slip containers when present
+                for sel in (
+                    "[class*='betslip']", "[class*='BetSlip']", "[class*='bet-slip']",
+                    "[class*='booking']", "[class*='share']", "[id*='betslip']",
+                    "main", "[role='main']",
+                ):
+                    try:
+                        loc = page.locator(sel)
+                        if loc.count() > 0:
+                            chunk = loc.first.inner_text(timeout=2000) or ""
+                            if len(re.findall(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", chunk)) >= 1:
+                                body = chunk
+                                break
+                    except Exception:
+                        pass
             finally:
                 try:
                     browser.close()
@@ -579,10 +582,14 @@ def _scrape_slip_with_playwright(url, timeout_ms=22000):
 
     # Cut the page down to ONLY the booked slip (the page also carries other
     # matches, promos, menus ... which used to be read as extra legs).
-    hwb = _isolate_hwb_slip(lines)
-    if hwb:
-        text, isolated = hwb, True
-    else:
+    # Hollywoodbets prints profit-style odds (0.20 = 1.20), which the generic
+    # isolator ignores, so cut its pages down with the Hollywoodbets-aware isolator first.
+    text, isolated = None, False
+    if re.search(r"(?i)hollywoodbets", url or ""):
+        _h = _isolate_hwb_slip(lines)
+        if _h:
+            text, isolated = _h, True
+    if text is None:
         text, isolated = _isolate_slip_lines(lines)
 
     # Require at least one decimal odds-looking number
@@ -597,6 +604,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=22000):
     return text, ("Loaded via browser, but the slip could not be separated from the rest "
                   "of the page — extra matches may appear. Delete anything that is not "
                   "your slip, then click Analyze.")
+
 
 def _hwb_odds(val):
     """Decimal odds; Hollywoodbets often prints profit (0.45 => 1.45)."""
@@ -1272,31 +1280,6 @@ def resolve_booking_code(code, bookie):
             return btext, ("Loaded from Betway — check the legs; "
                            "Analyze runs automatically.")
 
-    # --- Hollywoodbets: intercept share-page JSON, keep every selection ------
-    # Numeric Bet IDs (8–14 digits) and alphanumeric share codes (HB…) both load.
-    hwb_code = bool(re.fullmatch(r"\d{8,14}", code) or re.match(r"(?i)^HB[0-9A-Za-z]{3,12}$", code))
-    hwb_url = bool(re.search(r"(?i)hollywoodbets\.net", raw_in or code or ""))
-    if (hwb_code or hwb_url or bookie == "Hollywoodbets") and \
-            bookie in (None, "", "Auto", "Hollywoodbets"):
-        hcode = code
-        if hwb_url and not hwb_code:
-            m = re.search(
-                r"(?i)hollywoodbets\.net/(?:betting|betslip/share|share)/([0-9A-Za-z_-]+)(?:/code)?",
-                raw_in or code,
-            )
-            if m:
-                hcode = m.group(1)
-        legs, htext, hmsg = fetch_hollywoodbets_booking(hcode)
-        if htext:
-            if legs:
-                _cache_resolved_legs(htext, legs)
-            return htext, hmsg
-        if bookie == "Hollywoodbets" or hwb_code:
-            return None, hmsg or (
-                f"Could not retrieve Hollywoodbets Bet ID {hcode}. "
-                "Paste the slip text instead."
-            )
-
     cfg_all = load_bookie_lookup()
     headers_base = {"User-Agent": "Mozilla/5.0 MatchDesk"}
     tries = []
@@ -1326,8 +1309,6 @@ def resolve_booking_code(code, bookie):
             for au in (c.get("alt_urls") or []):
                 if au and au not in urls:
                     urls.append(au)
-            if n == "Hollywoodbets":
-                urls = urls[:2]
             for u in urls:
                 url = u.replace("{code}", urllib.parse.quote(code))
                 tries.append((url, c.get("headers") or {}, c))
