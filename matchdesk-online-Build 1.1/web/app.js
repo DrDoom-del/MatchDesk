@@ -1098,7 +1098,7 @@ async function bookingOpen(){
   if(!lastLegs.length)st.innerHTML=`The slip loaded, but I could not read any legs from it. This is what came back:<pre class="raw">${esc(hr.text.slice(0,600))}</pre>Copy this text to me and I will fix the reader.`;return}
   const diag=diagnoseCodeError(hr.message,raw,bk);
   // show what the server actually reported (HTTP status, page title, timing) so a failure can be diagnosed
-  const tech=String(hr.message||'').replace(/\s+/g,' ').trim().slice(0,700),techHtml=tech?`<br><span class="muted" style="font-size:.85em;word-break:break-word">Technical detail: ${esc(tech)}</span>`:'';
+  const tech=String(hr.message||'').replace(/\s+/g,' ').trim().slice(0,1400),techHtml=tech?`<br><span class="muted" style="font-size:.85em;word-break:break-word">Technical detail: ${esc(tech)}</span>`:'';
   if(bk==='Hollywoodbets'){
    st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>${esc(diag)}${techHtml}<br><span class="muted"></span><br><a href="https://www.hollywoodbets.net/betting/${encodeURIComponent(code)}/code" target="_blank" rel="noopener"><b>Open this Bet ID on Hollywoodbets</b></a> <span class="muted">– copy the slip there, come back and press <b>Paste from Clipboard</b> (or import a screenshot).</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
    helpWireNeed(st);return}

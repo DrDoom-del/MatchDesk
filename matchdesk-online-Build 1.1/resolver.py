@@ -561,7 +561,16 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000, engine="auto"):
             if BROWSERLESS_TOKEN:
                 _remote = True
                 browser = None
-                if engine == "unblock":
+                if engine == "proxy":
+                    _pws = "wss://production-sfo.browserless.io/stealth?token=%s&proxy=residential&proxyCountry=za&proxySticky=true" % BROWSERLESS_TOKEN
+                    try:
+                        browser = p.chromium.connect_over_cdp(_pws)
+                        _info["engine"] = "Browserless stealth + ZA residential proxy"
+                    except Exception as _e:
+                        _info["engine"] = "Browserless ZA proxy (connection refused)"
+                        _info["unblock_note"] = "proxy connect failed: %s" % type(_e).__name__
+                        raise _SecurityCheckBlock()
+                elif engine == "unblock":
                     # Browserless 'unblock': their own browser + South African residential proxy
                     # passes the bookmaker's bot check, then hands the live page back to us.
                     _ws, _note = _browserless_unblock(url)
@@ -648,11 +657,15 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000, engine="auto"):
                             _b = ""
                         # Cloudflare / bot-check wall: give it a few seconds to clear on its
                         # own, then stop instead of waiting a full minute for nothing.
-                        if re.search(r"(?i)performing security verification|just a moment|"
-                                     r"verify you are human|checking your browser", _b[:700]):
+                        _hard = bool(re.search(
+                            r"(?i)sorry, you have been blocked|you are unable to access|"
+                            r"attention required|access denied|error 1020|error 1005|error 1006", _b[:900]))
+                        if _hard or re.search(r"(?i)performing security verification|just a moment|"
+                                              r"verify you are human|checking your browser", _b[:700]):
                             if _chal0 is None:
                                 _chal0 = time.time()
-                            elif time.time() - _chal0 > 15:
+                            if _hard or time.time() - _chal0 > 15:
+                                _info["hard"] = _hard
                                 try:
                                     _info["title"] = (page.title() or "").strip()
                                     _info["peek"] = re.sub(r"\s+", " ", _b).strip()
@@ -740,8 +753,11 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000, engine="auto"):
                     pass
     except _SecurityCheckBlock:
         return None, (
-            "Hollywoodbets is showing a security check (Cloudflare) to this server, so the slip "
-            "cannot be read automatically from here. This happens with cloud hosts like Render, "
+            ("Hollywoodbets (Cloudflare) has blocked this server's address outright, a security check "
+             "that cannot be passed from here. " if _info.get("hard") else
+             "Hollywoodbets is showing a security check (Cloudflare) to this server, so the slip "
+             "cannot be read automatically from here. ")
+            + "This happens with cloud hosts like Render, "
             "not on a home connection. Open the slip on Hollywoodbets and paste it instead."
             + ("" if BROWSERLESS_WS else
                " Free fix: add your free Browserless token as the BROWSERLESS_TOKEN setting "
@@ -1574,6 +1590,7 @@ def resolve_booking_code(code, bookie):
     _tried_hosts = set()
     _attempts = 0
     _stop = False
+    _steps = []                         # one short diagnostic per attempt, shown together on failure
     for url in spa_urls:
         _host = urllib.parse.urlparse(url).netloc.lower()
         if _host in _tried_hosts:
@@ -1591,14 +1608,21 @@ def resolve_booking_code(code, bookie):
             if text:
                 return text, msg
             last_err = msg or last_err
+            _m = re.search(r"\[diagnostic:[^\]]*\]", msg or "")
+            if _m:
+                _steps.append("(%d) %s" % (_attempts, _m.group(0)[13:-1].strip()))
             if "security check" in (msg or "").lower():
                 if BROWSERLESS_TOKEN and _eng == "auto":
-                    _engines.append("unblock")      # one escalation: residential ZA proxy
+                    _engines.extend(["proxy", "unblock"])   # escalate: ZA residential proxy, then unblock
                     continue
+                if BROWSERLESS_TOKEN and _eng == "proxy":
+                    continue                                 # next in list: unblock
                 _stop = True                        # nothing more to try on this server
                 break
         if _stop:
             break
+    if len(_steps) > 1:
+        last_err = (last_err or "") + " All steps tried: " + " ## ".join(_steps)
     if spa_urls and not last_err:
         last_err = "The bookmaker page did not show a slip for that code."
 
