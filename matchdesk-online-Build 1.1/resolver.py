@@ -20,7 +20,8 @@ BROWSERLESS_TOKEN = os.environ.get("BROWSERLESS_TOKEN", "").strip()
 # BROWSERLESS_TOKEN = "2VVjAQbMVWKvdchd9666c40755335c43f60d045fea458f8e0"
 
 BROWSERLESS_WS = (
-    f"wss://production-sfo.browserless.io?token={BROWSERLESS_TOKEN}"
+    (os.environ.get("BROWSERLESS_URL", "").strip().replace("{token}", BROWSERLESS_TOKEN)
+     or f"wss://production-sfo.browserless.io?token={BROWSERLESS_TOKEN}")
     if BROWSERLESS_TOKEN else None
 )
 
@@ -491,6 +492,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
             bits.append("HTTP %s" % _info["status"])
         if _info.get("title"):
             bits.append("title \"%s\"" % _info["title"][:60])
+        bits.append("browser: " + ("Browserless (free cloud browser)" if BROWSERLESS_WS else "this server's own browser (no BROWSERLESS_TOKEN set)"))
         bits.append("%.0fs" % (time.time() - _t0))
         if _info.get("peek"):
             bits.append("page began: \"%s\"" % _info["peek"][:110])
@@ -666,6 +668,9 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
             "Hollywoodbets is showing a security check (Cloudflare) to this server, so the slip "
             "cannot be read automatically from here. This happens with cloud hosts like Render, "
             "not on a home connection. Open the slip on Hollywoodbets and paste it instead."
+            + ("" if BROWSERLESS_WS else
+               " Free fix: add your free Browserless token as the BROWSERLESS_TOKEN setting "
+               "(browserless.io) and the page is loaded from a different network.")
         ) + _dg()
     except Exception as e:
         _e1 = (str(e).strip().splitlines() or [""])[0][:160]
