@@ -474,6 +474,24 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
         )
     body = ""
     _t0 = time.time()
+    _info = {}
+
+    def _dg():
+        """Short 'what did the bookmaker actually send us' note appended to failures."""
+        bits = []
+        try:
+            bits.append(urllib.parse.urlparse(url).netloc)
+        except Exception:
+            pass
+        if _info.get("status") is not None:
+            bits.append("HTTP %s" % _info["status"])
+        if _info.get("title"):
+            bits.append("title \"%s\"" % _info["title"][:60])
+        bits.append("%.0fs" % (time.time() - _t0))
+        if _info.get("peek"):
+            bits.append("page began: \"%s\"" % _info["peek"][:110])
+        return " [diagnostic: " + " | ".join(bits) + "]"
+
     try:
         with sync_playwright() as p:
             if BROWSERLESS_WS:
@@ -520,7 +538,11 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                     except Exception:
                         pass
                 _rlog("opening %s" % url)
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                _resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                try:
+                    _info["status"] = _resp.status if _resp is not None else None
+                except Exception:
+                    pass
                 _rlog("page opened after %.1fs" % (time.time() - _t0))
                 # Hollywoodbets: stop waiting the moment the slip is on the page
                 # (its page never goes network-idle, so the fixed waits below
@@ -549,6 +571,11 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                         pass
                     page.wait_for_timeout(3000)
                 body = page.inner_text("body") or ""
+                try:
+                    _info["title"] = (page.title() or "").strip()
+                    _info["peek"] = re.sub(r"\s+", " ", body).strip()
+                except Exception:
+                    pass
                 if not _ready:
                     # Cookie / age / region banners
                     for label in (
@@ -606,14 +633,15 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                 except Exception:
                     pass
     except Exception as e:
-        return None, f"Browser load failed ({type(e).__name__}: {e})."
+        _e1 = (str(e).strip().splitlines() or [""])[0][:160]
+        return None, f"Browser load failed ({type(e).__name__}: {_e1})." + _dg()
 
     if not body or len(body.strip()) < 20:
         return None, (
             "Page opened but no slip text was visible (code may be expired, "
             "geo-blocked, or the share link needs you to be logged in). "
             "Open the link in your browser and paste the slip text instead."
-        )
+        ) + _dg()
 
     # Turn page text into something the existing slip parser understands
     lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in body.splitlines()]
@@ -646,7 +674,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
             "Opened the share page but could not find selection odds. "
             "The code may be expired, live-only, or the page layout changed. "
             "Open the link on the bookie site and paste the slip text instead."
-        )
+        ) + _dg()
     if isolated:
         return text, "Loaded via browser — check the legs, then Analyze runs automatically."
     return text, ("Loaded via browser, but the slip could not be separated from the rest "

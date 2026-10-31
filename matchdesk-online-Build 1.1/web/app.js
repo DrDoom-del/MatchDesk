@@ -1097,10 +1097,12 @@ async function bookingOpen(){
  if(hr){if(hr.ok&&hr.text){$('#slip').value=hr.text;st.textContent=(hr.message||'Loaded.')+' Analyzed on the right.';$('#analyze').click();
   if(!lastLegs.length)st.innerHTML=`The slip loaded, but I could not read any legs from it. This is what came back:<pre class="raw">${esc(hr.text.slice(0,600))}</pre>Copy this text to me and I will fix the reader.`;return}
   const diag=diagnoseCodeError(hr.message,raw,bk);
+  // show what the server actually reported (HTTP status, page title, timing) so a failure can be diagnosed
+  const tech=String(hr.message||'').replace(/\s+/g,' ').trim().slice(-450),techHtml=tech?`<br><span class="muted" style="font-size:.85em;word-break:break-word">Technical detail: ${esc(tech)}</span>`:'';
   if(bk==='Hollywoodbets'){
-   st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>${esc(diag)}<br><span class="muted">MatchDesk did not open Hollywoodbets in another tab. Copy the slip from the Hollywoodbets app or site and press Paste from Clipboard, or import a screenshot.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
+   st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>${esc(diag)}${techHtml}<br><span class="muted">MatchDesk did not open Hollywoodbets in another tab. Copy the slip from the Hollywoodbets app or site and press Paste from Clipboard, or import a screenshot.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
    helpWireNeed(st);return}
-  st.innerHTML=`<b>Could not load automatically</b><br>${esc(diag)}<br><span class="muted">I will try to open the bookmaker page so you can copy the slip instead.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
+  st.innerHTML=`<b>Could not load automatically</b><br>${esc(diag)}${techHtml}<br><span class="muted">I will try to open the bookmaker page so you can copy the slip instead.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
   helpWireNeed(st)}
  else if(bk==='Hollywoodbets'){
   st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>The MatchDesk server is not reachable, so the Bet ID was not fetched. Start the server (or local helper) and try again, or paste the slip text / import a screenshot. ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
