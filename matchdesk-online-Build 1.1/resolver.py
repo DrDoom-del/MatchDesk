@@ -456,6 +456,10 @@ def _page_slip_text(page, body):
     return hwb or best
 
 
+class _SecurityCheckBlock(Exception):
+    """The bookmaker answered with a bot-check page (Cloudflare 'Just a moment')."""
+
+
 def _rlog(msg):
     """Timing breadcrumbs for the server log (Render > Logs)."""
     try:
@@ -499,7 +503,16 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                 browser = p.chromium.connect_over_cdp(BROWSERLESS_WS)
             else:
                 # Local Playwright (desktop / own machine)
+                _launch_kw = {}
+                if os.environ.get("MD_PROXY_SERVER", "").strip():
+                    # Optional: route the browser through a proxy (e.g. a South African
+                    # residential/ISP proxy) so cloud-host IPs are not challenged.
+                    _launch_kw["proxy"] = {"server": os.environ["MD_PROXY_SERVER"].strip()}
+                    if os.environ.get("MD_PROXY_USER", "").strip():
+                        _launch_kw["proxy"]["username"] = os.environ["MD_PROXY_USER"].strip()
+                        _launch_kw["proxy"]["password"] = os.environ.get("MD_PROXY_PASS", "")
                 browser = p.chromium.launch(
+                    **_launch_kw,
                     headless=True,
                     args=[
                         "--disable-blink-features=AutomationControlled",
@@ -550,11 +563,27 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                 _ready = False
                 if re.search(r"(?i)hollywoodbets", url or ""):
                     _t_end = time.time() + min(30, timeout_ms / 1000.0)
+                    _chal0 = None
                     while time.time() < _t_end:
                         try:
                             _b = page.inner_text("body") or ""
                         except Exception:
                             _b = ""
+                        # Cloudflare / bot-check wall: give it a few seconds to clear on its
+                        # own, then stop instead of waiting a full minute for nothing.
+                        if re.search(r"(?i)performing security verification|just a moment|"
+                                     r"verify you are human|checking your browser", _b[:700]):
+                            if _chal0 is None:
+                                _chal0 = time.time()
+                            elif time.time() - _chal0 > 8:
+                                try:
+                                    _info["title"] = (page.title() or "").strip()
+                                    _info["peek"] = re.sub(r"\s+", " ", _b).strip()
+                                except Exception:
+                                    pass
+                                raise _SecurityCheckBlock()
+                            page.wait_for_timeout(500)
+                            continue
                         _tail = _b.rsplit("Betslip", 1)[-1] if "Betslip" in _b else ""
                         if re.search(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", _tail) and \
                                 re.search(r"(?i)\bvs\.?\b|\s-\s", _tail):
@@ -632,6 +661,12 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                     browser.close()
                 except Exception:
                     pass
+    except _SecurityCheckBlock:
+        return None, (
+            "Hollywoodbets is showing a security check (Cloudflare) to this server, so the slip "
+            "cannot be read automatically from here. This happens with cloud hosts like Render, "
+            "not on a home connection. Open the slip on Hollywoodbets and paste it instead."
+        ) + _dg()
     except Exception as e:
         _e1 = (str(e).strip().splitlines() or [""])[0][:160]
         return None, f"Browser load failed ({type(e).__name__}: {_e1})." + _dg()
@@ -1472,6 +1507,8 @@ def resolve_booking_code(code, bookie):
         if text:
             return text, msg
         last_err = msg or last_err
+        if "security check" in (msg or "").lower():
+            break
     if spa_urls and not last_err:
         last_err = "The bookmaker page did not show a slip for that code."
 

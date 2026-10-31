@@ -1100,7 +1100,7 @@ async function bookingOpen(){
   // show what the server actually reported (HTTP status, page title, timing) so a failure can be diagnosed
   const tech=String(hr.message||'').replace(/\s+/g,' ').trim().slice(-450),techHtml=tech?`<br><span class="muted" style="font-size:.85em;word-break:break-word">Technical detail: ${esc(tech)}</span>`:'';
   if(bk==='Hollywoodbets'){
-   st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>${esc(diag)}${techHtml}<br><span class="muted">MatchDesk did not open Hollywoodbets in another tab. Copy the slip from the Hollywoodbets app or site and press Paste from Clipboard, or import a screenshot.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
+   st.innerHTML=`<b>Could not load Hollywoodbets Bet ID ${esc(code)}</b><br>${esc(diag)}${techHtml}<br><span class="muted"></span><br><a href="https://www.hollywoodbets.net/betting/${encodeURIComponent(code)}/code" target="_blank" rel="noopener"><b>Open this Bet ID on Hollywoodbets</b></a> <span class="muted">– copy the slip there, come back and press <b>Paste from Clipboard</b> (or import a screenshot).</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
    helpWireNeed(st);return}
   st.innerHTML=`<b>Could not load automatically</b><br>${esc(diag)}${techHtml}<br><span class="muted">I will try to open the bookmaker page so you can copy the slip instead.</span> ${helpNeedBtn('why won’t my booking code load','Need help?')}`;
   helpWireNeed(st)}
