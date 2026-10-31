@@ -1006,25 +1006,33 @@ def fetch_hollywoodbets_booking(code, timeout_ms=45000):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
-            )
-            try:
-                context = browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/124.0.0.0 Safari/537.36"
-                    ),
-                    locale="en-ZA",
-                    viewport={"width": 1280, "height": 1100},
-                    extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
+            if BROWSERLESS_WS:
+                browser = p.chromium.connect_over_cdp(BROWSERLESS_WS)
+                _hwb_remote = True
+            else:
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
                 )
+                _hwb_remote = False
+            try:
+                if _hwb_remote and browser.contexts:
+                    context = browser.contexts[0]
+                else:
+                    context = browser.new_context(
+                        user_agent=(
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                        locale="en-ZA",
+                        viewport={"width": 1280, "height": 1100},
+                        extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
+                    )
                 page = context.new_page()
                 page.on("response", on_response)
                 opened = False
