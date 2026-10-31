@@ -667,6 +667,23 @@ function parseHWB(text){
  }
  const seen=new Set(),uniq=[];
  for(const l of legs){const k=(l.match||'')+'|'+(l.sel||'')+'|'+(l.odds||'');if(seen.has(k))continue;seen.add(k);uniq.push(l)}
+ // Backup reader by SHAPE: every selection card reads  heading / price / fixture.  This keeps legs whose
+ // market name is not in the list above (rugby, tennis, basketball...), which the name-based pass would drop.
+ const st=[];
+ for(let p=1;p<L.length-1;p++){
+  if(!hwbIsPrice(L[p]))continue;
+  const head=L[p-1],fx=L[p+1];
+  if(!hwbIsFix(fx)||hwbIsPrice(head)||hwbIsDate(head)||foot.test(head)||foot.test(fx))continue;
+  const o=toHW(L[p]);if(o==null)continue;
+  const hm=head.match(/^(.{2,45}?)\s*[-–—:]\s*(.+)$/);
+  const mkName=hm?hm[1].trim():'',pk=((hm?hm[2]:head)||'').trim()||mkName;
+  const fixture=hwbNormFix(fx),pr=fixture.split(/\s+(?:-|–|—|vs\.?|v\.?)\s+/i);
+  st.push(mkLeg({sel:pk,odds:o,market:classify(mkName)||'1X2',match:fixture,
+   home_team:pr.length>=2?pr[0].trim():null,away_team:pr.length>=2?pr.slice(1).join(' - ').trim():null},'Hollywoodbets'));
+ }
+ const ss=new Set(),stu=[];
+ for(const l of st){const k=(l.match||'')+'|'+(l.sel||'')+'|'+(l.odds||'');if(ss.has(k))continue;ss.add(k);stu.push(l)}
+ if(stu.length>uniq.length)return stu;
  return uniq.length?uniq:null;
 }
 function sim(a,b){a=a.toLowerCase().replace(/[^a-z0-9]/g,'');b=b.toLowerCase().replace(/[^a-z0-9]/g,'');if(!a||!b)return 0;

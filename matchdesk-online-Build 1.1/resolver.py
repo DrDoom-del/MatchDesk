@@ -375,6 +375,41 @@ _HWB_HEAD_RE = re.compile(
     r"(?:\s*[-–—:~|].*)?$"
 )
 
+
+_HWB_DATE_LINE = re.compile(
+    r"(?i)\b\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}\s*\|\s*\d{1,2}:\d{2}")
+
+
+def _hwb_expected_count(body):
+    """The number Hollywoodbets prints on the Betslip tab = how many selections the slip holds."""
+    m = None
+    for m in re.finditer(r"(?m)^\s*(\d{1,2})\s*\n\s*Betslip\s*$", body or ""):
+        pass
+    return int(m.group(1)) if m else None
+
+
+def _hwb_legs_present(chunk):
+    """How many selection cards are currently in the slip text (one date line / x mark each)."""
+    dates = len(_HWB_DATE_LINE.findall(chunk or ""))
+    xs = len(re.findall(r"(?m)^\s*[\u00d7x]\s*$", chunk or ""))
+    return max(dates, xs)
+
+
+def _hwb_struct_start(lines):
+    """Index of the first selection card judged by shape (head, price, fixture, date), so a
+    market name we do not know cannot cut the first legs off the slip."""
+    core = [i for i, l in enumerate(lines) if l.strip() not in ("\u00d7", "x", "X", "\u25cf", "\u2022")]
+    pos = {idx: k for k, idx in enumerate(core)}
+    for idx in core:
+        if _HWB_DATE_LINE.search(lines[idx]):
+            k = pos[idx]
+            if k >= 3:
+                fx, pr, hd = lines[core[k - 1]], lines[core[k - 2]], lines[core[k - 3]]
+                if re.match(r"^\d{0,3}[.,]\d{2}$", pr.strip()) and re.search(r"(?i)\s(?:vs\.?|v\.?|-)\s", fx):
+                    return core[k - 3]
+    return None
+
+
 def _isolate_hwb_slip(lines):
     """Keep every Hollywoodbets market heading through to the slip footer.
 
@@ -383,9 +418,12 @@ def _isolate_hwb_slip(lines):
     separators.
     """
     heads = [i for i, l in enumerate(lines) if _HWB_HEAD_RE.match(l)]
-    if len(heads) < 1:
+    _ss = _hwb_struct_start(lines)
+    if len(heads) < 1 and _ss is None:
         return None
-    start = heads[0]
+    if len(heads) < 1:
+        heads = [_ss]
+    start = heads[0] if _ss is None else min(heads[0], _ss)
     end = len(lines)
     for i, l in enumerate(lines):
         if i > start and len(l) < 60 and _SLIP_END_RE.match(l):
@@ -650,6 +688,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000, engine="auto"):
                 if re.search(r"(?i)hollywoodbets", url or ""):
                     _t_end = time.time() + min(30, timeout_ms / 1000.0)
                     _chal0 = None
+                    _last_have, _last_change, _last_nudge = -1, time.time(), 0.0
                     while time.time() < _t_end:
                         try:
                             _b = page.inner_text("body") or ""
@@ -677,9 +716,39 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000, engine="auto"):
                         _tail = _b.rsplit("Betslip", 1)[-1] if "Betslip" in _b else ""
                         if re.search(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", _tail) and \
                                 re.search(r"(?i)\bvs\.?\b|\s-\s", _tail):
-                            page.wait_for_timeout(1000)   # let the last leg render
-                            _ready = True
-                            break
+                            # A long ticket is drawn card by card. Wait until every selection
+                            # the Betslip badge promises is on the page (and it has stopped growing).
+                            _exp = _hwb_expected_count(_b)
+                            _have = _hwb_legs_present(_tail)
+                            if _have != _last_have:
+                                _last_have, _last_change = _have, time.time()
+                            _stable = time.time() - _last_change
+                            _footer = bool(re.search(
+                                r"(?i)multiple accumulator|final odds|total odds|\bstake\b", _tail))
+                            if (_exp is not None and _have >= _exp and _stable >= 1.0) or \
+                                    (_exp is None and _footer and _stable >= 3.0):
+                                _rlog("selections on page: %s of %s" % (_have, _exp))
+                                _ready = True
+                                break
+                            if _exp is not None and _have < _exp and _stable >= 4 \
+                                    and time.time() - _last_nudge >= 4:
+                                _last_nudge = time.time()      # nudge lazy-rendered lists
+                                try:
+                                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                                    page.wait_for_timeout(300)
+                                    page.evaluate("window.scrollTo(0, 0)")
+                                except Exception:
+                                    pass
+                                # a collapsed long slip may hide the rest behind a 'show more' control
+                                for _lab in ("show more", "view all", "see all", "load more",
+                                             "more selections"):
+                                    try:
+                                        _bt = page.get_by_role("button", name=re.compile(_lab, re.I))
+                                        if _bt.count() > 0:
+                                            _bt.first.click(timeout=1000)
+                                            break
+                                    except Exception:
+                                        pass
                         page.wait_for_timeout(500)
                 _rlog("slip %s after %.1fs" % ("visible" if _ready else "NOT seen yet", time.time() - _t0))
                 if not _ready:
@@ -807,7 +876,14 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000, engine="auto"):
             "Open the link on the bookie site and paste the slip text instead."
         ) + _dg()
     if isolated:
-        return text, "Loaded via browser — check the legs, then Analyze runs automatically."
+        _msg = "Loaded via browser — check the legs, then Analyze runs automatically."
+        if re.search(r"(?i)hollywoodbets", url or ""):
+            _exp2, _have2 = _hwb_expected_count(body), _hwb_legs_present(text)
+            _rlog("final: %s of %s selections" % (_have2, _exp2))
+            if _exp2 and _have2 and _have2 < _exp2:
+                _msg = ("Only %d of %d selections were on the page when it was read. "
+                        "Press Load code again, or paste the slip text. " % (_have2, _exp2)) + _msg
+        return text, _msg
     return text, ("Loaded via browser, but the slip could not be separated from the rest "
                   "of the page — extra matches may appear. Delete anything that is not "
                   "your slip, then click Analyze.")
