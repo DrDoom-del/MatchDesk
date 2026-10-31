@@ -468,7 +468,62 @@ def _rlog(msg):
     except Exception:
         pass
 
-def _scrape_slip_with_playwright(url, timeout_ms=55000):
+def _bl_candidates():
+    """Browserless addresses to try, best first. Stealth mode first (it hides the
+    automation flags bookmakers' bot checks look for); the plain address second."""
+    if not BROWSERLESS_TOKEN:
+        return []
+    custom = os.environ.get("BROWSERLESS_URL", "").strip()
+    if custom:
+        return [("Browserless (custom address)", custom.replace("{token}", BROWSERLESS_TOKEN))]
+    return [
+        ("Browserless stealth", "wss://production-sfo.browserless.io/stealth?token=%s" % BROWSERLESS_TOKEN),
+        ("Browserless", "wss://production-sfo.browserless.io?token=%s" % BROWSERLESS_TOKEN),
+    ]
+
+
+def _connect_browserless(p):
+    """Connect to Browserless, falling back from stealth to the plain address."""
+    errs = []
+    for label, ws in _bl_candidates():
+        try:
+            return p.chromium.connect_over_cdp(ws), label
+        except Exception as e:
+            errs.append("%s: %s" % (label, type(e).__name__))
+            _rlog("Browserless connect failed - " + errs[-1])
+    raise RuntimeError("Browserless connection failed (" + "; ".join(errs) + ")")
+
+
+def _browserless_unblock(url, timeout_s=35):
+    """Ask Browserless to open the page itself through a South African residential
+    proxy and solve the bot check, then give us its browser endpoint.
+    Returns (ws_endpoint_or_None, short_note_for_the_diagnostic_line)."""
+    if not BROWSERLESS_TOKEN:
+        return None, "no BROWSERLESS_TOKEN"
+    try:
+        r = requests.post(
+            "https://production-sfo.browserless.io/unblock",
+            params={"token": BROWSERLESS_TOKEN, "proxy": "residential",
+                    "proxyCountry": "za", "proxySticky": "true"},
+            json={"url": url, "browserWSEndpoint": True, "ttl": 60000},
+            timeout=timeout_s,
+        )
+    except Exception as e:
+        return None, "request failed (%s)" % type(e).__name__
+    if r.status_code != 200:
+        return None, "HTTP %s %s" % (r.status_code, re.sub(r"\s+", " ", r.text or "")[:90])
+    try:
+        ws = (r.json() or {}).get("browserWSEndpoint")
+    except Exception:
+        ws = None
+    if not ws:
+        return None, "no browser endpoint returned"
+    if "token=" not in ws:
+        ws += ("&" if "?" in ws else "?") + "token=" + BROWSERLESS_TOKEN
+    return ws, "ok"
+
+
+def _scrape_slip_with_playwright(url, timeout_ms=55000, engine="auto"):
     """Open a bookmaker share/results page headlessly and pull visible slip text.
     Returns (slip_text_or_None, message). Never raises."""
     if not HAS_PLAYWRIGHT:
@@ -492,7 +547,9 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
             bits.append("HTTP %s" % _info["status"])
         if _info.get("title"):
             bits.append("title \"%s\"" % _info["title"][:60])
-        bits.append("browser: " + ("Browserless (free cloud browser)" if BROWSERLESS_WS else "this server's own browser (no BROWSERLESS_TOKEN set)"))
+        bits.append("browser: " + (_info.get("engine") or ("Browserless" if BROWSERLESS_WS else "this server's own browser (no BROWSERLESS_TOKEN set)")))
+        if _info.get("unblock_note"):
+            bits.append("unblock: " + _info["unblock_note"][:120])
         bits.append("%.0fs" % (time.time() - _t0))
         if _info.get("peek"):
             bits.append("page began: \"%s\"" % _info["peek"][:110])
@@ -500,9 +557,28 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
 
     try:
         with sync_playwright() as p:
-            if BROWSERLESS_WS:
-                # Remote browser via Browserless free tier
-                browser = p.chromium.connect_over_cdp(BROWSERLESS_WS)
+            _remote = False
+            if BROWSERLESS_TOKEN:
+                _remote = True
+                browser = None
+                if engine == "unblock":
+                    # Browserless 'unblock': their own browser + South African residential proxy
+                    # passes the bookmaker's bot check, then hands the live page back to us.
+                    _ws, _note = _browserless_unblock(url)
+                    _info["unblock_note"] = _note
+                    if _ws:
+                        try:
+                            browser = p.chromium.connect_over_cdp(_ws)
+                            _info["engine"] = "Browserless unblock (ZA residential)"
+                        except Exception as _e:
+                            _info["unblock_note"] = "connect failed: %s" % type(_e).__name__
+                    if browser is None:
+                        # Unblock was asked for but is not available (plan / network): say so
+                        # and stop, instead of silently repeating the attempt that was blocked.
+                        _info["engine"] = "Browserless unblock (not available)"
+                        raise _SecurityCheckBlock()
+                if browser is None:
+                    browser, _info["engine"] = _connect_browserless(p)
             else:
                 # Local Playwright (desktop / own machine)
                 _launch_kw = {}
@@ -522,9 +598,10 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                         "--no-sandbox",
                     ],
                 )
+                _info["engine"] = "this server's own browser (no BROWSERLESS_TOKEN set)"
             try:
                 # When using connect_over_cdp the default context already exists
-                if BROWSERLESS_WS and browser.contexts:
+                if _remote and browser.contexts:
                     context = browser.contexts[0]
                 else:
                     context = browser.new_context(
@@ -537,23 +614,21 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                         viewport={"width": 1280, "height": 1100},
                         extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
                     )
-                page = context.new_page()
-                _is_hwb = bool(re.search(r"(?i)hollywoodbets", url or ""))
-                if _is_hwb:
-                    def _blk(route):
-                        try:
-                            if route.request.resource_type in ("image", "media", "font"):
-                                route.abort()
-                            else:
-                                route.continue_()
-                        except Exception:
-                            pass
-                    try:
-                        page.route("**/*", _blk)
-                    except Exception:
-                        pass
+                if engine == "unblock" and _remote and context.pages:
+                    page = context.pages[0]
+                else:
+                    page = context.new_page()
                 _rlog("opening %s" % url)
-                _resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                _resp = None
+                _cur = ""
+                try:
+                    _cur = page.url or ""
+                except Exception:
+                    pass
+                if engine == "unblock" and "hollywoodbets" in _cur.lower():
+                    pass   # the unblock call already loaded the page past the check
+                else:
+                    _resp = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
                 try:
                     _info["status"] = _resp.status if _resp is not None else None
                 except Exception:
@@ -577,7 +652,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                                      r"verify you are human|checking your browser", _b[:700]):
                             if _chal0 is None:
                                 _chal0 = time.time()
-                            elif time.time() - _chal0 > 8:
+                            elif time.time() - _chal0 > 15:
                                 try:
                                     _info["title"] = (page.title() or "").strip()
                                     _info["peek"] = re.sub(r"\s+", " ", _b).strip()
@@ -947,19 +1022,6 @@ def _hwb_legs_to_text(legs):
         lines.append(leg.get("match") or "Unknown")
         lines.append("")
     return "\n".join(lines).strip()
-def _browserless_unblock(url, timeout_ms=45000):
-    if not BROWSERLESS_TOKEN:
-        return None
-    import requests as _req
-    api = "https://production-sfo.browserless.io/unblock"
-    params = {"token": BROWSERLESS_TOKEN, "proxy": "residential", "proxyCountry": "za", "proxySticky": "true"}
-    try:
-        r = _req.post(api, params=params, json={"url": url, "browserWSEndpoint": True, "ttl": 30000}, timeout=60)
-        if r.status_code == 200:
-            return r.json().get("browserWSEndpoint")
-    except Exception:
-        pass
-    return None
 
 def fetch_hollywoodbets_booking(code, timeout_ms=45000):
     """Load a Hollywoodbets Bet ID internally.
@@ -1019,37 +1081,26 @@ def fetch_hollywoodbets_booking(code, timeout_ms=45000):
 
     try:
         with sync_playwright() as p:
-            _ws = None
-            if BROWSERLESS_TOKEN:
-                _ws = _browserless_unblock(urls[0], timeout_ms)
-            if _ws:
-                browser = p.chromium.connect_over_cdp(f"{_ws}?token={BROWSERLESS_TOKEN}")
-                _hwb_remote = True
-            else:
-                browser = p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-dev-shm-usage",
-                        "--no-sandbox",
-                    ],
-                )
-                _hwb_remote = False
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ],
+            )
             try:
-                if _hwb_remote and browser.contexts:
-                    context = browser.contexts[0]
-                else:
-                    context = browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/124.0.0.0 Safari/537.36"
-                        ),
-                        locale="en-ZA",
-                        viewport={"width": 1280, "height": 1100},
-                        extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
-                    )
-                page = context.pages[0] if (_hwb_remote and context.pages) else context.new_page()
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    locale="en-ZA",
+                    viewport={"width": 1280, "height": 1100},
+                    extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
+                )
+                page = context.new_page()
                 page.on("response", on_response)
                 opened = False
                 for url in urls:
@@ -1519,24 +1570,34 @@ def resolve_booking_code(code, bookie):
     # Playwright path for SPA share pages (Betway etc.)
     # Hard time budget: the old loop tried every alternate address one after another
     # (up to 55 s each), which could run for minutes and look like a freeze.
-    _deadline = time.time() + 75
+    _deadline = time.time() + 92       # stay under the host's ~100 s request limit
     _tried_hosts = set()
     _attempts = 0
+    _stop = False
     for url in spa_urls:
         _host = urllib.parse.urlparse(url).netloc.lower()
         if _host in _tried_hosts:
             continue
-        _left = _deadline - time.time()
-        if _attempts >= 2 or (_attempts >= 1 and _left < 25):
-            break
         _tried_hosts.add(_host)
-        _attempts += 1
-        text, msg = _scrape_slip_with_playwright(
-            url, timeout_ms=int(max(15000, min(55000, _left * 1000 * 0.7))))
-        if text:
-            return text, msg
-        last_err = msg or last_err
-        if "security check" in (msg or "").lower():
+        _engines = ["auto"]
+        for _eng in _engines:           # may gain an 'unblock' step below
+            _left = _deadline - time.time()
+            if _attempts >= 3 or _left < 20 or (_attempts >= 1 and _eng == "auto" and _left < 30):
+                _stop = True
+                break
+            _attempts += 1
+            text, msg = _scrape_slip_with_playwright(
+                url, timeout_ms=int(max(15000, min(55000, _left * 1000 * 0.6))), engine=_eng)
+            if text:
+                return text, msg
+            last_err = msg or last_err
+            if "security check" in (msg or "").lower():
+                if BROWSERLESS_TOKEN and _eng == "auto":
+                    _engines.append("unblock")      # one escalation: residential ZA proxy
+                    continue
+                _stop = True                        # nothing more to try on this server
+                break
+        if _stop:
             break
     if spa_urls and not last_err:
         last_err = "The bookmaker page did not show a slip for that code."
