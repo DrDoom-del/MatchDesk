@@ -455,6 +455,14 @@ def _page_slip_text(page, body):
     )
     return hwb or best
 
+
+def _rlog(msg):
+    """Timing breadcrumbs for the server log (Render > Logs)."""
+    try:
+        print("[loader] " + str(msg), flush=True)
+    except Exception:
+        pass
+
 def _scrape_slip_with_playwright(url, timeout_ms=55000):
     """Open a bookmaker share/results page headlessly and pull visible slip text.
     Returns (slip_text_or_None, message). Never raises."""
@@ -465,6 +473,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
             "— then restart MatchDesk. Or paste the full slip text below and click Analyze."
         )
     body = ""
+    _t0 = time.time()
     try:
         with sync_playwright() as p:
             if BROWSERLESS_WS:
@@ -496,7 +505,23 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                         extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
                     )
                 page = context.new_page()
+                _is_hwb = bool(re.search(r"(?i)hollywoodbets", url or ""))
+                if _is_hwb:
+                    def _blk(route):
+                        try:
+                            if route.request.resource_type in ("image", "media", "font"):
+                                route.abort()
+                            else:
+                                route.continue_()
+                        except Exception:
+                            pass
+                    try:
+                        page.route("**/*", _blk)
+                    except Exception:
+                        pass
+                _rlog("opening %s" % url)
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                _rlog("page opened after %.1fs" % (time.time() - _t0))
                 # Hollywoodbets: stop waiting the moment the slip is on the page
                 # (its page never goes network-idle, so the fixed waits below
                 # were burning ~30 s even when the slip appeared in 2 s).
@@ -515,6 +540,7 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                             _ready = True
                             break
                         page.wait_for_timeout(500)
+                _rlog("slip %s after %.1fs" % ("visible" if _ready else "NOT seen yet", time.time() - _t0))
                 if not _ready:
                     # Wait for SPA to populate odds / selections
                     try:
@@ -523,56 +549,58 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                         pass
                     page.wait_for_timeout(3000)
                 body = page.inner_text("body") or ""
-                # Cookie / age / region banners
-                for label in (
-                    "Accept", "Accept all", "Accept All", "I agree", "Got it", "OK",
-                    "Allow all", "Agree", "Continue", "I am 18", "Yes, I am",
-                ):
-                    try:
-                        btn = page.get_by_role("button", name=re.compile(label, re.I))
-                        if btn.count() > 0:
-                            btn.first.click(timeout=1500)
-                            page.wait_for_timeout(1000)
-                            body = page.inner_text("body") or body
-                            break
-                    except Exception:
-                        pass
-                # Hollywoodbets / Supabets often lazy-render the booked slip —
-                # scroll and wait for an odds-looking number to appear.
-                try:
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight/3)")
-                    page.wait_for_timeout(800)
-                    page.evaluate("window.scrollTo(0, 0)")
-                except Exception:
-                    pass
-                try:
-                    page.wait_for_function(
-                        r"""() => {
-                            const t = document.body ? document.body.innerText : '';
-                            return /\d{1,3}\.\d{2}/.test(t) || t.length > 400;
-                        }""",
-                        timeout=12000,
-                    )
-                except Exception:
-                    pass
-                page.wait_for_timeout(1500)
-                body = page.inner_text("body") or body
-                # Prefer denser slip containers when present
-                for sel in (
-                    "[class*='betslip']", "[class*='BetSlip']", "[class*='bet-slip']",
-                    "[class*='booking']", "[class*='share']", "[id*='betslip']",
-                    "main", "[role='main']",
-                ):
-                    try:
-                        loc = page.locator(sel)
-                        if loc.count() > 0:
-                            chunk = loc.first.inner_text(timeout=2000) or ""
-                            if len(re.findall(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", chunk)) >= 1:
-                                body = chunk
+                if not _ready:
+                    # Cookie / age / region banners
+                    for label in (
+                        "Accept", "Accept all", "Accept All", "I agree", "Got it", "OK",
+                        "Allow all", "Agree", "Continue", "I am 18", "Yes, I am",
+                    ):
+                        try:
+                            btn = page.get_by_role("button", name=re.compile(label, re.I))
+                            if btn.count() > 0:
+                                btn.first.click(timeout=1500)
+                                page.wait_for_timeout(1000)
+                                body = page.inner_text("body") or body
                                 break
+                        except Exception:
+                            pass
+                    # Hollywoodbets / Supabets often lazy-render the booked slip —
+                    # scroll and wait for an odds-looking number to appear.
+                    try:
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight/3)")
+                        page.wait_for_timeout(800)
+                        page.evaluate("window.scrollTo(0, 0)")
                     except Exception:
                         pass
+                    try:
+                        page.wait_for_function(
+                            r"""() => {
+                                const t = document.body ? document.body.innerText : '';
+                                return /\d{1,3}\.\d{2}/.test(t) || t.length > 400;
+                            }""",
+                            timeout=12000,
+                        )
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(1500)
+                    body = page.inner_text("body") or body
+                    # Prefer denser slip containers when present
+                    for sel in (
+                        "[class*='betslip']", "[class*='BetSlip']", "[class*='bet-slip']",
+                        "[class*='booking']", "[class*='share']", "[id*='betslip']",
+                        "main", "[role='main']",
+                    ):
+                        try:
+                            loc = page.locator(sel)
+                            if loc.count() > 0:
+                                chunk = loc.first.inner_text(timeout=2000) or ""
+                                if len(re.findall(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", chunk)) >= 1:
+                                    body = chunk
+                                    break
+                        except Exception:
+                            pass
             finally:
+                _rlog("done in %.1fs" % (time.time() - _t0))
                 try:
                     browser.close()
                 except Exception:
