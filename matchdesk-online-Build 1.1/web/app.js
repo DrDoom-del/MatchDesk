@@ -753,7 +753,7 @@ const SPEC={Hollywoodbets:parseHWB,'10Bet':parse10Bet,Supabets:parseSupa,Sportin
 function parse(text){
  const bk=detectBookie(text),clean=cleanBetway(text);
  // Prefer the dedicated Hollywoodbets leg reader for cropped slip screenshots.
-  if(bk==='Hollywoodbets'||/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|draw\s*no\s*bet)\s*[-–—:]/im.test(text)||(/hollywood/i.test(text)&&hwbFlatten(text).length>=4)){
+  if(bk==='Hollywoodbets'||(!/betway|build a bet|bet saver/i.test(text)&&/^(?:double\s*chance|full\s*time(?:\s*result)?|match\s*result|match\s*winner|1x2|draw\s*no\s*bet)\s*[-–—:]/im.test(text))||(/hollywood/i.test(text)&&hwbFlatten(text).length>=4)){
    for(const t of [text,clean]){let g;try{g=parseHWB(t)}catch{}
     g=(g||[]).filter(l=>!junk(l)&&!KICK_RE.test(l.sel)&&!isFoot(l.sel));if(g.length)return g}
   }
