@@ -37,8 +37,6 @@ Then open http://localhost:8080
 |---|---|---|
 | `MD_RATE_PER_MIN` | 8 | code lookups per user per minute |
 | `MD_CONCURRENCY` | 2 | lookups running at the same time |
-| `BROWSERLESS_TOKEN` | (none) | free token from browserless.io. Loads Hollywoodbets/Betway pages in a cloud browser, which gets past the Cloudflare check that blocks Render |
-| `MD_PROXY_SERVER`, `MD_PROXY_USER`, `MD_PROXY_PASS` | (none) | optional proxy for the built-in browser |
 | `MD_CACHE_SECS` | 300 | how long a loaded code is remembered |
 | `MD_ORIGIN` | * | restrict which websites may call the API |
 | `MD_GLOBAL_RATE_PER_MIN` | 40 | code lookups for ALL users together per minute (0 = off) |
