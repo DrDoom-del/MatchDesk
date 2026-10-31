@@ -4,7 +4,8 @@ The hosted PWA uses the same local Playwright/Chromium launch path as the
 working desktop application. Keep the Playwright Python package version in
 sync with the Chromium version supplied by the Docker base image.
 """
-import re, os, sys, json, hashlib, urllib.parse
+import re
+import time, os, sys, json, hashlib, urllib.parse
 import requests
 try:
     from playwright.sync_api import sync_playwright
@@ -496,12 +497,31 @@ def _scrape_slip_with_playwright(url, timeout_ms=55000):
                     )
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                # Wait for SPA to populate odds / selections
-                try:
-                    page.wait_for_load_state("networkidle", timeout=min(25000, timeout_ms))
-                except Exception:
-                    pass
-                page.wait_for_timeout(3000)
+                # Hollywoodbets: stop waiting the moment the slip is on the page
+                # (its page never goes network-idle, so the fixed waits below
+                # were burning ~30 s even when the slip appeared in 2 s).
+                _ready = False
+                if re.search(r"(?i)hollywoodbets", url or ""):
+                    _t_end = time.time() + min(30, timeout_ms / 1000.0)
+                    while time.time() < _t_end:
+                        try:
+                            _b = page.inner_text("body") or ""
+                        except Exception:
+                            _b = ""
+                        _tail = _b.rsplit("Betslip", 1)[-1] if "Betslip" in _b else ""
+                        if re.search(r"(?<!\d)\d{1,3}\.\d{2}(?!\d)", _tail) and \
+                                re.search(r"(?i)\bvs\.?\b|\s-\s", _tail):
+                            page.wait_for_timeout(1000)   # let the last leg render
+                            _ready = True
+                            break
+                        page.wait_for_timeout(500)
+                if not _ready:
+                    # Wait for SPA to populate odds / selections
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=min(25000, timeout_ms))
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(3000)
                 body = page.inner_text("body") or ""
                 # Cookie / age / region banners
                 for label in (
@@ -1377,11 +1397,27 @@ def resolve_booking_code(code, bookie):
             last_err = f"Could not connect ({type(e).__name__})."
 
     # Playwright path for SPA share pages (Betway etc.)
+    # Hard time budget: the old loop tried every alternate address one after another
+    # (up to 55 s each), which could run for minutes and look like a freeze.
+    _deadline = time.time() + 75
+    _tried_hosts = set()
+    _attempts = 0
     for url in spa_urls:
-        text, msg = _scrape_slip_with_playwright(url)
+        _host = urllib.parse.urlparse(url).netloc.lower()
+        if _host in _tried_hosts:
+            continue
+        _left = _deadline - time.time()
+        if _attempts >= 2 or (_attempts >= 1 and _left < 25):
+            break
+        _tried_hosts.add(_host)
+        _attempts += 1
+        text, msg = _scrape_slip_with_playwright(
+            url, timeout_ms=int(max(15000, min(55000, _left * 1000 * 0.7))))
         if text:
             return text, msg
         last_err = msg or last_err
+    if spa_urls and not last_err:
+        last_err = "The bookmaker page did not show a slip for that code."
 
     # Last resort: try Playwright on any remaining HTTP URL that looked empty
     if not spa_urls and tries and HAS_PLAYWRIGHT:
