@@ -947,6 +947,19 @@ def _hwb_legs_to_text(legs):
         lines.append(leg.get("match") or "Unknown")
         lines.append("")
     return "\n".join(lines).strip()
+def _browserless_unblock(url, timeout_ms=45000):
+    if not BROWSERLESS_TOKEN:
+        return None
+    import requests as _req
+    api = "https://production-sfo.browserless.io/unblock"
+    params = {"token": BROWSERLESS_TOKEN, "proxy": "residential", "proxyCountry": "za", "proxySticky": "true"}
+    try:
+        r = _req.post(api, params=params, json={"url": url, "browserWSEndpoint": True, "ttl": 30000}, timeout=60)
+        if r.status_code == 200:
+            return r.json().get("browserWSEndpoint")
+    except Exception:
+        pass
+    return None
 
 def fetch_hollywoodbets_booking(code, timeout_ms=45000):
     """Load a Hollywoodbets Bet ID internally.
@@ -1006,8 +1019,11 @@ def fetch_hollywoodbets_booking(code, timeout_ms=45000):
 
     try:
         with sync_playwright() as p:
-            if BROWSERLESS_WS:
-                browser = p.chromium.connect_over_cdp(BROWSERLESS_WS)
+            _ws = None
+            if BROWSERLESS_TOKEN:
+                _ws = _browserless_unblock(urls[0], timeout_ms)
+            if _ws:
+                browser = p.chromium.connect_over_cdp(f"{_ws}?token={BROWSERLESS_TOKEN}")
                 _hwb_remote = True
             else:
                 browser = p.chromium.launch(
@@ -1033,7 +1049,7 @@ def fetch_hollywoodbets_booking(code, timeout_ms=45000):
                         viewport={"width": 1280, "height": 1100},
                         extra_http_headers={"Accept-Language": "en-ZA,en;q=0.9"},
                     )
-                page = context.new_page()
+                page = context.pages[0] if (_hwb_remote and context.pages) else context.new_page()
                 page.on("response", on_response)
                 opened = False
                 for url in urls:
